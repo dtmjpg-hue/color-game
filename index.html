@@ -2,249 +2,369 @@
 <html lang="ja">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>瞬間色合わせチャレンジ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>シンプルコインキャッチ</title>
     <style>
-        /* CSSリセットと基本スタイル */
+        /* 全体のスタイル */
         html, body {
             height: 100%;
             margin: 0;
-            padding: 0;
-            overflow: hidden; /* スクロール防止 */
-            font-family: 'Arial', sans-serif;
-            background-color: #e0f2f7; /* 明るい水色系の背景 */
-            color: #333;
-            -webkit-user-select: none; /* テキスト選択無効化 */
-            -moz-user-select: none;
-            -ms-user-select: none;
-            user-select: none;
-            -webkit-tap-highlight-color: transparent; /* タップ時のハイライト除去 */
+            overflow: hidden; /* スクロールを禁止 */
+            touch-action: manipulation; /* ブラウザのジェスチャーを無効化（ピンチズームなど） */
+            user-select: none; /* テキスト選択を禁止 */
+            -webkit-user-select: none; /* Safari向け */
+            -moz-user-select: none; /* Firefox向け */
+            -ms-user-select: none; /* IE向け */
         }
 
-        /* ゲームコンテナ - 縦画面スマホの中央に配置 */
-        #game-container {
+        body {
             display: flex;
             flex-direction: column;
-            justify-content: space-between; /* 要素を上下に分散 */
+            justify-content: center;
             align-items: center;
-            width: 100%;
-            max-width: 450px; /* スマホ画面の最大幅を想定 */
-            height: 100%; /* 親要素の高さに合わせる */
-            margin: 0 auto; /* 中央寄せ */
-            padding: 20px;
-            box-sizing: border-box; /* paddingをwidth/heightに含める */
+            background-color: #333;
+            color: #eee;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            position: relative; /* 子要素のabsolute配置基準 */
         }
 
-        /* スコア表示 */
-        #score-display {
+        /* スクリーン共通スタイル */
+        #start-screen, #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        /* ゲーム画面スタイル */
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: none; /* 初期状態では非表示 */
+        }
+
+        #gameCanvas {
+            display: block;
+            background-color: #222;
+        }
+
+        /* 情報バー（スコア・時間） */
+        #info-bar {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            display: flex;
+            justify-content: space-around;
+            padding: 10px 0;
+            background-color: rgba(0, 0, 0, 0.5);
             font-size: 1.5em;
             font-weight: bold;
+            color: #FFD700; /* 金色 */
+            z-index: 10;
+        }
+
+        /* テキストスタイル */
+        .title {
+            font-size: 2.8em;
             margin-bottom: 20px;
-            color: #333;
+            color: #FFD700; /* 金色 */
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.7);
         }
 
-        /* ゲーム表示エリア - 問題とメッセージ */
-        #game-area {
-            flex-grow: 1; /* 残りの高さを占める */
-            display: flex;
-            flex-direction: column;
-            justify-content: center; /* 垂直方向中央寄せ */
-            align-items: center; /* 水平方向中央寄せ */
-            width: 100%;
-            margin-bottom: 20px;
-        }
-
-        /* 問題表示テキスト */
-        #problem-display {
-            font-size: 5em; /* 大きな文字 */
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 20px;
-            min-height: 1.5em; /* テキストがないときに高さを保持 */
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); /* 少し影をつけて見やすく */
-        }
-
-        /* ゲームオーバーなどのメッセージ */
-        #message-display {
-            font-size: 2em;
-            font-weight: bold;
-            color: #d32f2f; /* 赤系の警告色 */
-            text-align: center;
-            margin-top: 10px;
-        }
-
-        /* ボタンコンテナ - グリッドで2x2配置 */
-        #button-container {
-            display: grid;
-            grid-template-columns: 1fr 1fr; /* 2列 */
-            gap: 15px; /* ボタン間のスペース */
-            width: 100%;
-            max-width: 350px; /* ボタンの最大幅を制限 */
-            margin-bottom: 20px;
-        }
-
-        /* 選択肢ボタンの共通スタイル */
-        #button-container button {
-            width: 100%;
-            height: 80px; /* タップしやすい高さ */
-            font-size: 2em;
-            font-weight: bold;
-            border: none;
-            border-radius: 10px; /* 角丸 */
-            cursor: pointer;
-            transition: background-color 0.1s, transform 0.1s; /* ホバーとアクティブ時のアニメーション */
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 影 */
-        }
-
-        /* 各色のボタン固有スタイル */
-        #btn-red { background-color: #ef5350; color: white; } /* 赤 */
-        #btn-blue { background-color: #2196f3; color: white; } /* 青 */
-        #btn-green { background-color: #4caf50; color: white; } /* 緑 */
-        #btn-yellow { background-color: #ffeb3b; color: #333; } /* 黄色 (文字色は黒) */
-
-        /* ボタンのアクティブ状態 (タップ時) */
-        #button-container button:active {
-            transform: scale(0.98); /* 少し縮小 */
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        /* リトライボタン */
-        #retry-button {
-            background-color: #607d8b; /* グレー系の背景 */
-            color: white;
+        .score-text {
             font-size: 1.8em;
+            margin-bottom: 10px;
+        }
+
+        .high-score-text {
+            font-size: 1.5em;
+            margin-top: 20px;
+            color: #ccc;
+        }
+
+        /* ボタン共通スタイル */
+        button {
             padding: 15px 30px;
+            font-size: 1.5em;
+            cursor: pointer;
             border: none;
             border-radius: 10px;
-            cursor: pointer;
-            display: none; /* 初期状態では非表示 */
+            background-color: #4CAF50; /* 緑色 */
+            color: white;
             margin-top: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            transition: background-color 0.1s, transform 0.1s;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            outline: none; /* フォーカス時のアウトラインを削除 */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを削除 */
         }
 
-        #retry-button:active {
-            transform: scale(0.98);
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        button:active {
+            transform: translateY(2px);
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
+        }
+
+        button:hover {
+            background-color: #45a049;
         }
     </style>
 </head>
 <body>
+
+    <!-- スタート画面 -->
+    <div id="start-screen">
+        <h1 class="title">シンプルコインキャッチ</h1>
+        <p class="score-text">画面をタップして飛んでくるコインを集めよう！</p>
+        <button id="start-button">ゲーム開始</button>
+        <p class="high-score-text">ハイスコア: <span id="start-high-score-value">0</span></p>
+    </div>
+
+    <!-- ゲーム画面 -->
     <div id="game-container">
-        <div id="score-display">スコア: 0</div>
-        <div id="game-area">
-            <div id="problem-display"></div>
-            <div id="message-display"></div>
+        <div id="info-bar">
+            <span>スコア: <span id="score-value">0</span></span>
+            <span>時間: <span id="timer-value">30</span></span>
         </div>
-        <div id="button-container">
-            <button id="btn-red" data-color="赤">赤</button>
-            <button id="btn-blue" data-color="青">青</button>
-            <button id="btn-green" data-color="緑">緑</button>
-            <button id="btn-yellow" data-color="黄">黄</button>
-        </div>
-        <button id="retry-button">リトライ</button>
+        <canvas id="gameCanvas"></canvas>
+    </div>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="game-over-screen">
+        <h2 class="title">ゲームオーバー！</h2>
+        <p class="score-text">あなたのスコア: <span id="final-score-value">0</span></p>
+        <p class="high-score-text">ハイスコア: <span id="high-score-value">0</span></p>
+        <button id="retry-button">もう一度遊ぶ</button>
     </div>
 
     <script>
-        const colors = [
-            { name: '赤', value: '#FF0000', label: 'あか' },
-            { name: '青', value: '#0000FF', label: 'あお' },
-            { name: '緑', value: '#008000', label: 'みどり' },
-            { name: '黄', value: '#FFD700', label: 'きいろ' }
-        ];
-
-        let score = 0;
-        let gameActive = false;
-        let currentCorrectColorName = ''; // 正解となる色名 (表示テキストの色)
-        let answerTimeoutId; // 回答時間切れのsetTimeout ID
-
-        const answerTimeLimit = 1500; // 回答の制限時間 (ミリ秒)
-
-        // DOM要素の取得
-        const scoreDisplay = document.getElementById('score-display');
-        const problemDisplay = document.getElementById('problem-display');
-        const messageDisplay = document.getElementById('message-display');
+        // HTML要素の取得
+        const gameContainer = document.getElementById('game-container');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-value');
+        const timerDisplay = document.getElementById('timer-value');
+        const finalScoreDisplay = document.getElementById('final-score-value');
+        const highScoreDisplay = document.getElementById('high-score-value');
+        const startHighScoreDisplay = document.getElementById('start-high-score-value');
+        const startButton = document.getElementById('start-button');
         const retryButton = document.getElementById('retry-button');
-        const colorButtons = document.querySelectorAll('#button-container button');
 
-        // ランダムなインデックスを取得
-        function getRandomIndex(max) {
-            return Math.floor(Math.random() * max);
+        // ゲーム変数の定義
+        let gameState = 'start'; // 'start', 'playing', 'gameOver'
+        let score = 0;
+        let highScore = 0;
+        let gameTimer = 30; // ゲームの制限時間（秒）
+        let lastFrameTime = 0; // 最終フレームの時刻 (performance.now())
+        let coinSpawnTimer = 0; // コイン生成間隔を管理するタイマー
+        let coins = []; // 画面上のコインを格納する配列
+        const COIN_RADIUS = 25; // コインの半径
+        const COIN_SPAWN_INTERVAL = 600; // コイン生成間隔（ミリ秒）
+        const COIN_MAX_SPEED = 250; // コインの最大落下速度（ピクセル/秒）
+        const COIN_MIN_SPEED = 150; // コインの最小落下速度（ピクセル/秒）
+        const TOUCH_TOLERANCE = 10; // タップ判定の許容範囲（ピクセル）
+
+        // ゲームの初期化
+        function init() {
+            resizeCanvas(); // キャンバスサイズをウィンドウに合わせる
+            window.addEventListener('resize', resizeCanvas); // ウィンドウリサイズ時にもキャンバスを調整
+            canvas.addEventListener('touchstart', handleTouch); // タッチイベントリスナーを設定
+            startButton.addEventListener('click', startGame); // スタートボタンのイベントリスナー
+            retryButton.addEventListener('click', startGame); // リトライボタンのイベントリスナー
+
+            loadHighScore(); // ハイスコアを読み込む
+            updateHighScoreDisplay(); // ハイスコア表示を更新
+            showStartScreen(); // スタート画面を表示
         }
 
-        // 次の問題を表示する関数
-        function nextProblem() {
-            if (!gameActive) return;
-
-            // 前回の時間切れタイマーをクリア
-            if (answerTimeoutId) {
-                clearTimeout(answerTimeoutId);
-            }
-
-            // テキストに表示する色名 (例: 'あお' の 'あお')
-            const textColorScheme = colors[getRandomIndex(colors.length)];
-            // 実際に表示される色 (例: 'あお' が赤色で表示される時の '赤')
-            const displayColorScheme = colors[getRandomIndex(colors.length)];
-
-            problemDisplay.textContent = textColorScheme.label;
-            problemDisplay.style.color = displayColorScheme.value;
-            currentCorrectColorName = displayColorScheme.name; // 正解は「表示されている色」の名前
-
-            messageDisplay.textContent = ''; // メッセージをクリア
-
-            // 回答時間切れタイマーを設定
-            answerTimeoutId = setTimeout(() => {
-                gameOver('時間切れ！');
-            }, answerTimeLimit);
+        // キャンバスサイズをウィンドウに合わせる関数
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            // 縦長すぎる場合に備えて、info-barの高さなどを考慮して高さを調整することも可能だが、今回はシンプルに画面いっぱいに表示
         }
 
-        // 回答ボタンがクリックされた時の処理
-        function handleButtonClick(event) {
-            if (!gameActive) return;
-
-            const selectedColor = event.target.dataset.color;
-
-            if (selectedColor === currentCorrectColorName) {
-                score++;
-                scoreDisplay.textContent = `スコア: ${score}`;
-                nextProblem(); // 正解したらすぐに次の問題へ
-            } else {
-                gameOver('不正解！');
+        // ハイスコアをLocalStorageから読み込む関数
+        function loadHighScore() {
+            const storedHighScore = localStorage.getItem('simpleCoinCatchHighScore');
+            if (storedHighScore) {
+                highScore = parseInt(storedHighScore, 10);
             }
         }
 
-        // ゲームオーバー処理
-        function gameOver(message) {
-            gameActive = false;
-            if (answerTimeoutId) {
-                clearTimeout(answerTimeoutId);
-            }
-            problemDisplay.textContent = ''; // 問題をクリア
-            problemDisplay.style.color = '#333'; // 色をリセット
-            messageDisplay.textContent = `${message} スコア: ${score}`;
-            retryButton.style.display = 'block'; // リトライボタンを表示
-            colorButtons.forEach(button => button.disabled = true); // ボタンを無効化
+        // ハイスコアをLocalStorageに保存する関数
+        function saveHighScore() {
+            localStorage.setItem('simpleCoinCatchHighScore', highScore);
         }
 
-        // ゲーム開始/初期化処理
+        // スタート画面の表示
+        function showStartScreen() {
+            startScreen.style.display = 'flex';
+            gameContainer.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            updateHighScoreDisplay(); // スタート画面のハイスコアも更新
+        }
+
+        // ゲーム画面の表示
+        function showGameScreen() {
+            startScreen.style.display = 'none';
+            gameContainer.style.display = 'block';
+            gameOverScreen.style.display = 'none';
+        }
+
+        // ゲームオーバー画面の表示
+        function showGameOverScreen() {
+            startScreen.style.display = 'none';
+            gameContainer.style.display = 'none';
+            gameOverScreen.style.display = 'flex';
+            finalScoreDisplay.textContent = score; // 最終スコアを表示
+            updateHighScoreDisplay(); // ハイスコア表示を更新
+        }
+
+        // スコア表示を更新する関数
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = score;
+        }
+
+        // ハイスコア表示を更新する関数
+        function updateHighScoreDisplay() {
+            highScoreDisplay.textContent = highScore; // ゲームオーバー画面のハイスコア
+            startHighScoreDisplay.textContent = highScore; // スタート画面のハイスコア
+        }
+
+        // ゲーム開始
         function startGame() {
-            score = 0;
-            scoreDisplay.textContent = `スコア: ${score}`;
-            messageDisplay.textContent = ''; // メッセージをクリア
-            retryButton.style.display = 'none'; // リトライボタンを隠す
-            colorButtons.forEach(button => button.disabled = false); // ボタンを有効化
-            gameActive = true;
-            nextProblem(); // 最初の問題を開始
+            score = 0; // スコアをリセット
+            gameTimer = 30; // タイマーをリセット
+            coins = []; // コインをクリア
+            gameState = 'playing'; // ゲーム状態を「プレイ中」に
+            lastFrameTime = performance.now(); // 最終フレーム時刻をリセット
+            coinSpawnTimer = 0; // コイン生成タイマーをリセット
+            updateScoreDisplay(); // スコア表示を更新
+            updateHighScoreDisplay(); // ハイスコア表示を更新
+            showGameScreen(); // ゲーム画面を表示
+            requestAnimationFrame(gameLoop); // ゲームループを開始
         }
 
-        // イベントリスナーの設定
-        colorButtons.forEach(button => {
-            button.addEventListener('click', handleButtonClick);
-        });
-        retryButton.addEventListener('click', startGame);
+        // ゲームループ
+        function gameLoop(currentTime) {
+            if (gameState !== 'playing') return; // プレイ中でなければループを停止
 
-        // ページロード時にゲーム開始
-        startGame();
+            const deltaTime = (currentTime - lastFrameTime) / 1000; // 前フレームからの経過時間（秒）
+            lastFrameTime = currentTime;
+
+            updateGame(deltaTime); // ゲームの状態を更新
+            drawGame(); // ゲーム要素を描画
+
+            requestAnimationFrame(gameLoop); // 次のフレームを要求
+        }
+
+        // ゲームの状態を更新する関数
+        function updateGame(deltaTime) {
+            // タイマーの更新
+            gameTimer -= deltaTime;
+            if (gameTimer <= 0) {
+                gameTimer = 0;
+                endGame(); // ゲーム終了
+                return;
+            }
+            timerDisplay.textContent = Math.ceil(gameTimer); // 残り時間を表示（小数点以下切り上げ）
+
+            // コインの生成
+            coinSpawnTimer += deltaTime * 1000; // msに変換して加算
+            if (coinSpawnTimer >= COIN_SPAWN_INTERVAL) {
+                spawnCoin(); // 新しいコインを生成
+                coinSpawnTimer = 0; // タイマーをリセット
+            }
+
+            // コインの位置を更新し、画面外のコインを削除
+            for (let i = coins.length - 1; i >= 0; i--) {
+                const coin = coins[i];
+                coin.y += coin.speed * deltaTime; // コインを落下させる
+
+                // 画面下部に到達したコインを削除
+                if (coin.y - COIN_RADIUS > canvas.height) {
+                    coins.splice(i, 1);
+                }
+            }
+        }
+
+        // ゲーム要素を描画する関数
+        function drawGame() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // キャンバスをクリア
+
+            // コインを描画
+            coins.forEach(coin => {
+                ctx.beginPath();
+                ctx.arc(coin.x, coin.y, COIN_RADIUS, 0, Math.PI * 2);
+                ctx.fillStyle = coin.color;
+                ctx.fill();
+                ctx.strokeStyle = 'rgba(0,0,0,0.5)'; // コインの縁
+                ctx.lineWidth = 2;
+                ctx.stroke();
+            });
+        }
+
+        // 新しいコインを生成する関数
+        function spawnCoin() {
+            const x = Math.random() * (canvas.width - COIN_RADIUS * 2) + COIN_RADIUS; // X座標をランダムに設定
+            const y = -COIN_RADIUS; // 画面上部外から出現
+            const speed = Math.random() * (COIN_MAX_SPEED - COIN_MIN_SPEED) + COIN_MIN_SPEED; // 速度をランダムに設定
+            // 金色に近いHSLカラーを生成 (色相30-60度, 彩度100%, 明度50%)
+            const color = `hsl(${Math.random() * 30 + 30}, 100%, 50%)`;
+
+            coins.push({ x, y, speed, color });
+        }
+
+        // タッチイベントハンドラ
+        function handleTouch(event) {
+            event.preventDefault(); // デフォルトの動作（スクロールなど）を禁止
+
+            if (gameState !== 'playing') return; // プレイ中でなければ処理しない
+
+            const touch = event.touches[0]; // 最初のタッチイベントを取得
+            const touchX = touch.clientX;
+            const touchY = touch.clientY;
+
+            // タップされた位置にあるコインを検出
+            for (let i = coins.length - 1; i >= 0; i--) {
+                const coin = coins[i];
+                // タップ位置とコインの中心間の距離を計算
+                const distance = Math.sqrt((touchX - coin.x) ** 2 + (touchY - coin.y) ** 2);
+
+                if (distance < COIN_RADIUS + TOUCH_TOLERANCE) { // コインの半径 + 許容範囲内であればキャッチ
+                    score++; // スコア加算
+                    updateScoreDisplay(); // スコア表示を更新
+                    coins.splice(i, 1); // キャッチしたコインを配列から削除
+                    break; // 1回のタップで複数のコインをキャッチしないようにループを抜ける
+                }
+            }
+        }
+
+        // ゲーム終了
+        function endGame() {
+            gameState = 'gameOver'; // ゲーム状態を「ゲームオーバー」に
+            if (score > highScore) {
+                highScore = score; // ハイスコアを更新
+                saveHighScore(); // ハイスコアを保存
+            }
+            showGameOverScreen(); // ゲームオーバー画面を表示
+        }
+
+        // ウィンドウロード時にゲームを初期化
+        window.onload = init;
     </script>
 </body>
 </html>

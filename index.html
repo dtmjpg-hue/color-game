@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>瞬間色合わせチャレンジ</title>
+    <style>
+        /* CSSリセットと基本スタイル */
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* スクロール防止 */
+            font-family: 'Arial', sans-serif;
+            background-color: #e0f2f7; /* 明るい水色系の背景 */
+            color: #333;
+            -webkit-user-select: none; /* テキスト選択無効化 */
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライト除去 */
+        }
+
+        /* ゲームコンテナ - 縦画面スマホの中央に配置 */
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between; /* 要素を上下に分散 */
+            align-items: center;
+            width: 100%;
+            max-width: 450px; /* スマホ画面の最大幅を想定 */
+            height: 100%; /* 親要素の高さに合わせる */
+            margin: 0 auto; /* 中央寄せ */
+            padding: 20px;
+            box-sizing: border-box; /* paddingをwidth/heightに含める */
+        }
+
+        /* スコア表示 */
+        #score-display {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #333;
+        }
+
+        /* ゲーム表示エリア - 問題とメッセージ */
+        #game-area {
+            flex-grow: 1; /* 残りの高さを占める */
+            display: flex;
+            flex-direction: column;
+            justify-content: center; /* 垂直方向中央寄せ */
+            align-items: center; /* 水平方向中央寄せ */
+            width: 100%;
+            margin-bottom: 20px;
+        }
+
+        /* 問題表示テキスト */
+        #problem-display {
+            font-size: 5em; /* 大きな文字 */
+            font-weight: bold;
+            text-align: center;
+            margin-bottom: 20px;
+            min-height: 1.5em; /* テキストがないときに高さを保持 */
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); /* 少し影をつけて見やすく */
+        }
+
+        /* ゲームオーバーなどのメッセージ */
+        #message-display {
+            font-size: 2em;
+            font-weight: bold;
+            color: #d32f2f; /* 赤系の警告色 */
+            text-align: center;
+            margin-top: 10px;
+        }
+
+        /* ボタンコンテナ - グリッドで2x2配置 */
+        #button-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr; /* 2列 */
+            gap: 15px; /* ボタン間のスペース */
+            width: 100%;
+            max-width: 350px; /* ボタンの最大幅を制限 */
+            margin-bottom: 20px;
+        }
+
+        /* 選択肢ボタンの共通スタイル */
+        #button-container button {
+            width: 100%;
+            height: 80px; /* タップしやすい高さ */
+            font-size: 2em;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px; /* 角丸 */
+            cursor: pointer;
+            transition: background-color 0.1s, transform 0.1s; /* ホバーとアクティブ時のアニメーション */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1); /* 影 */
+        }
+
+        /* 各色のボタン固有スタイル */
+        #btn-red { background-color: #ef5350; color: white; } /* 赤 */
+        #btn-blue { background-color: #2196f3; color: white; } /* 青 */
+        #btn-green { background-color: #4caf50; color: white; } /* 緑 */
+        #btn-yellow { background-color: #ffeb3b; color: #333; } /* 黄色 (文字色は黒) */
+
+        /* ボタンのアクティブ状態 (タップ時) */
+        #button-container button:active {
+            transform: scale(0.98); /* 少し縮小 */
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        /* リトライボタン */
+        #retry-button {
+            background-color: #607d8b; /* グレー系の背景 */
+            color: white;
+            font-size: 1.8em;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            display: none; /* 初期状態では非表示 */
+            margin-top: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            transition: background-color 0.1s, transform 0.1s;
+        }
+
+        #retry-button:active {
+            transform: scale(0.98);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="score-display">スコア: 0</div>
+        <div id="game-area">
+            <div id="problem-display"></div>
+            <div id="message-display"></div>
+        </div>
+        <div id="button-container">
+            <button id="btn-red" data-color="赤">赤</button>
+            <button id="btn-blue" data-color="青">青</button>
+            <button id="btn-green" data-color="緑">緑</button>
+            <button id="btn-yellow" data-color="黄">黄</button>
+        </div>
+        <button id="retry-button">リトライ</button>
+    </div>
+
+    <script>
+        const colors = [
+            { name: '赤', value: '#FF0000', label: 'あか' },
+            { name: '青', value: '#0000FF', label: 'あお' },
+            { name: '緑', value: '#008000', label: 'みどり' },
+            { name: '黄', value: '#FFD700', label: 'きいろ' }
+        ];
+
+        let score = 0;
+        let gameActive = false;
+        let currentCorrectColorName = ''; // 正解となる色名 (表示テキストの色)
+        let answerTimeoutId; // 回答時間切れのsetTimeout ID
+
+        const answerTimeLimit = 1500; // 回答の制限時間 (ミリ秒)
+
+        // DOM要素の取得
+        const scoreDisplay = document.getElementById('score-display');
+        const problemDisplay = document.getElementById('problem-display');
+        const messageDisplay = document.getElementById('message-display');
+        const retryButton = document.getElementById('retry-button');
+        const colorButtons = document.querySelectorAll('#button-container button');
+
+        // ランダムなインデックスを取得
+        function getRandomIndex(max) {
+            return Math.floor(Math.random() * max);
+        }
+
+        // 次の問題を表示する関数
+        function nextProblem() {
+            if (!gameActive) return;
+
+            // 前回の時間切れタイマーをクリア
+            if (answerTimeoutId) {
+                clearTimeout(answerTimeoutId);
+            }
+
+            // テキストに表示する色名 (例: 'あお' の 'あお')
+            const textColorScheme = colors[getRandomIndex(colors.length)];
+            // 実際に表示される色 (例: 'あお' が赤色で表示される時の '赤')
+            const displayColorScheme = colors[getRandomIndex(colors.length)];
+
+            problemDisplay.textContent = textColorScheme.label;
+            problemDisplay.style.color = displayColorScheme.value;
+            currentCorrectColorName = displayColorScheme.name; // 正解は「表示されている色」の名前
+
+            messageDisplay.textContent = ''; // メッセージをクリア
+
+            // 回答時間切れタイマーを設定
+            answerTimeoutId = setTimeout(() => {
+                gameOver('時間切れ！');
+            }, answerTimeLimit);
+        }
+
+        // 回答ボタンがクリックされた時の処理
+        function handleButtonClick(event) {
+            if (!gameActive) return;
+
+            const selectedColor = event.target.dataset.color;
+
+            if (selectedColor === currentCorrectColorName) {
+                score++;
+                scoreDisplay.textContent = `スコア: ${score}`;
+                nextProblem(); // 正解したらすぐに次の問題へ
+            } else {
+                gameOver('不正解！');
+            }
+        }
+
+        // ゲームオーバー処理
+        function gameOver(message) {
+            gameActive = false;
+            if (answerTimeoutId) {
+                clearTimeout(answerTimeoutId);
+            }
+            problemDisplay.textContent = ''; // 問題をクリア
+            problemDisplay.style.color = '#333'; // 色をリセット
+            messageDisplay.textContent = `${message} スコア: ${score}`;
+            retryButton.style.display = 'block'; // リトライボタンを表示
+            colorButtons.forEach(button => button.disabled = true); // ボタンを無効化
+        }
+
+        // ゲーム開始/初期化処理
+        function startGame() {
+            score = 0;
+            scoreDisplay.textContent = `スコア: ${score}`;
+            messageDisplay.textContent = ''; // メッセージをクリア
+            retryButton.style.display = 'none'; // リトライボタンを隠す
+            colorButtons.forEach(button => button.disabled = false); // ボタンを有効化
+            gameActive = true;
+            nextProblem(); // 最初の問題を開始
+        }
+
+        // イベントリスナーの設定
+        colorButtons.forEach(button => {
+            button.addEventListener('click', handleButtonClick);
+        });
+        retryButton.addEventListener('click', startGame);
+
+        // ページロード時にゲーム開始
+        startGame();
+    </script>
+</body>
+</html>

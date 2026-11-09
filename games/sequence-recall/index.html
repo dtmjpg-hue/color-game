@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>パターン記憶ゲーム</title>
+    <style>
+        /* 基本スタイル */
+        body {
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #282c34; /* 暗めの背景色 */
+            color: #fff; /* テキスト色 */
+            overflow: hidden; /* スマホでのスクロールを防止 */
+            -webkit-user-select: none; /* Safariでのテキスト選択を無効化 */
+            -moz-user-select: none; /* Firefoxでのテキスト選択を無効化 */
+            -ms-user-select: none; /* IE/Edgeでのテキスト選択を無効化 */
+            user-select: none; /* 標準のテキスト選択を無効化 */
+            touch-action: manipulation; /* タップ反応を最適化 (ダブルタップズーム等を防止) */
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            width: 90vw; /* 画面幅の90% */
+            max-width: 400px; /* 最大幅を設定してPC表示にも対応 */
+            padding: 20px 0;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            font-size: 2em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        /* メッセージとスコア表示 */
+        #message {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            height: 30px; /* メッセージ表示領域を確保し、レイアウトのずれを防ぐ */
+            text-align: center;
+        }
+
+        #score {
+            font-size: 1.2em;
+            margin-bottom: 20px;
+        }
+
+        /* ゲームボード */
+        #board {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr); /* 3x3グリッド */
+            gap: 10px; /* マス間の隙間 */
+            width: 100%;
+            aspect-ratio: 1 / 1; /* ボードを常に正方形に保つ */
+            background-color: #3a404b; /* ボードの背景色 */
+            padding: 10px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5); /* 影 */
+            margin-bottom: 20px;
+        }
+
+        /* マス目のスタイル */
+        .tile {
+            background-color: #5c6370; /* 通常時のマス目の色 */
+            border-radius: 8px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: 2em;
+            color: rgba(255, 255, 255, 0.2); /* マス目内の数字などを表示する場合の色 */
+            cursor: pointer;
+            transition: background-color 0.2s ease, transform 0.1s ease; /* 色と変形のトランジション */
+            box-shadow: inset 0 0 5px rgba(0, 0, 0, 0.3); /* 内側の影 */
+        }
+
+        .tile:active {
+            transform: scale(0.95); /* タップ時の縮小エフェクト */
+        }
+
+        /* ハイライト時のマス目の色 */
+        .tile.highlight {
+            background-color: #88ccff; /* ハイライト色 (青系) */
+            box-shadow: 0 0 15px #88ccff, inset 0 0 8px rgba(255, 255, 255, 0.7); /* 外側と内側の光る影 */
+        }
+        
+        /* 正解時のマス目の色 */
+        .tile.correct {
+            background-color: #7aff7a; /* 正解色 (緑系) */
+        }
+        
+        /* 不正解時のマス目の色 */
+        .tile.wrong {
+            background-color: #ff7a7a; /* 不正解色 (赤系) */
+        }
+
+        /* ボタンのスタイル */
+        button {
+            background-color: #4CAF50; /* ボタンの背景色 (緑) */
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 1.2em;
+            margin-top: 20px;
+            cursor: pointer;
+            border-radius: 8px;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            outline: none; /* クリック時のアウトラインを削除 */
+        }
+
+        button:hover {
+            background-color: #45a049; /* ホバー時の色 */
+        }
+        
+        button:active {
+            transform: scale(0.98); /* クリック時の縮小エフェクト */
+        }
+
+        /* 隠すためのユーティリティクラス */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>パターン記憶ゲーム</h1>
+        <div id="score">スコア: 0</div>
+        <div id="message">タップしてスタート！</div>
+        <div id="board">
+            <!-- タイルはJavaScriptでここに生成されます -->
+        </div>
+        <button id="startButton">スタート</button>
+        <button id="retryButton" class="hidden">もう一度プレイ</button>
+    </div>
+
+    <script>
+        // ゲーム設定
+        const TILE_COUNT = 9; // 3x3グリッドのマス目の総数
+        const HIGHLIGHT_DURATION = 400; // パターン表示時のハイライト時間 (ms)
+        const PAUSE_BETWEEN_HIGHLIGHTS = 150; // パターン表示時の各マス間の待機時間 (ms)
+        const INITIAL_ROUND_DELAY = 1000; // 各ラウンド開始からパターン表示までの待機時間 (ms)
+        const PLAYER_TAP_HIGHLIGHT_DURATION = 100; // プレイヤーがタップした時のハイライト時間 (ms)
+        const ROUND_END_PAUSE_DURATION = 800; // ラウンド終了（正解）後の待機時間 (ms)
+
+        // ゲームの状態変数
+        let score = 0; // 現在のスコア
+        let level = 1; // 現在のレベル（パターンの長さ）
+        let pattern = []; // 表示されるパターン (マス目のインデックスの配列)
+        let playerInput = []; // プレイヤーがタップしたパターン (マス目のインデックスの配列)
+        let isPlayerTurn = false; // 現在プレイヤーが入力できる状態か
+        let isDisplayingPattern = false; // 現在パターン表示中か
+        let allowTap = true; // タップイベントを受け付けるかどうかの全体フラグ
+
+        // DOM要素の参照
+        const messageEl = document.getElementById('message');
+        const scoreEl = document.getElementById('score');
+        const boardEl = document.getElementById('board');
+        const startButton = document.getElementById('startButton');
+        const retryButton = document.getElementById('retryButton');
+
+        /**
+         * ゲームボードのタイルを生成します。
+         */
+        function createTiles() {
+            boardEl.innerHTML = ''; // 既存のタイルをクリア
+            for (let i = 0; i < TILE_COUNT; i++) {
+                const tile = document.createElement('div');
+                tile.classList.add('tile');
+                tile.dataset.index = i; // マス目のインデックスをデータ属性として保持
+                tile.addEventListener('click', handleTileClick);
+                boardEl.appendChild(tile);
+            }
+        }
+
+        /**
+         * ゲームを初期状態にリセットします。
+         */
+        function initGame() {
+            score = 0;
+            level = 1;
+            pattern = [];
+            playerInput = [];
+            isPlayerTurn = false;
+            isDisplayingPattern = false;
+            allowTap = true; // 初期状態ではタップを受け付ける（スタートボタン用）
+
+            updateScore();
+            messageEl.textContent = 'タップしてスタート！';
+            startButton.classList.remove('hidden');
+            retryButton.classList.add('hidden');
+            resetTileStyles(); // 全てのタイルスタイルをリセット
+            createTiles(); // タイルを再生成
+        }
+
+        /**
+         * スコア表示を更新します。
+         */
+        function updateScore() {
+            scoreEl.textContent = `スコア: ${score}`;
+        }
+
+        /**
+         * 全てのタイルからハイライト、正解、不正解の色付けクラスを削除します。
+         */
+        function resetTileStyles() {
+            const tiles = document.querySelectorAll('.tile');
+            tiles.forEach(tile => {
+                tile.classList.remove('highlight', 'correct', 'wrong');
+            });
+        }
+
+        /**
+         * 現在のレベルに応じた新しいパターンを生成します。
+         */
+        function generatePattern() {
+            pattern = [];
+            for (let i = 0; i < level; i++) {
+                pattern.push(Math.floor(Math.random() * TILE_COUNT));
+            }
+        }
+
+        /**
+         * 生成されたパターンをボード上に順に表示（ハイライト）します。
+         */
+        function displayPattern() {
+            isDisplayingPattern = true; // パターン表示中フラグを立てる
+            allowTap = false; // パターン表示中はプレイヤーのタップを無効化
+            messageEl.textContent = 'パターンを記憶...';
+            resetTileStyles(); // 前のラウンドのスタイルをリセット
+
+            let i = 0;
+            const intervalId = setInterval(() => {
+                const tileIndex = pattern[i];
+                const tile = document.querySelector(`.tile[data-index="${tileIndex}"]`);
+                if (tile) {
+                    tile.classList.add('highlight');
+                    setTimeout(() => {
+                        tile.classList.remove('highlight');
+                    }, HIGHLIGHT_DURATION);
+                }
+                i++;
+                if (i >= pattern.length) {
+                    clearInterval(intervalId); // 全てのパターン表示が完了
+                    setTimeout(() => {
+                        isDisplayingPattern = false; // パターン表示終了
+                        isPlayerTurn = true; // プレイヤーのターンを開始
+                        allowTap = true; // プレイヤーのタップを有効化
+                        messageEl.textContent = '再現してください！';
+                        playerInput = []; // プレイヤー入力をリセット
+                    }, HIGHLIGHT_DURATION + PAUSE_BETWEEN_HIGHLIGHTS);
+                }
+            }, HIGHLIGHT_DURATION + PAUSE_BETWEEN_HIGHLIGHTS);
+        }
+
+        /**
+         * マス目がクリックされた時のイベントハンドラです。
+         * @param {Event} event - クリックイベントオブジェクト
+         */
+        function handleTileClick(event) {
+            // プレイヤーのターンでなく、パターン表示中、またはタップ無効状態なら何もしない
+            if (!isPlayerTurn || isDisplayingPattern || !allowTap) {
+                return;
+            }
+
+            const clickedTile = event.target;
+            const tileIndex = parseInt(clickedTile.dataset.index);
+
+            playerInput.push(tileIndex);
+            
+            // クリックされたタイルを短時間ハイライトしてフィードバック
+            clickedTile.classList.add('highlight');
+            setTimeout(() => {
+                clickedTile.classList.remove('highlight');
+            }, PLAYER_TAP_HIGHLIGHT_DURATION);
+
+            checkPlayerInput(); // プレイヤーの入力をチェック
+        }
+
+        /**
+         * プレイヤーが入力したパターンが正しいかどうかをチェックします。
+         */
+        function checkPlayerInput() {
+            const lastPlayerTapIndex = playerInput.length - 1;
+
+            // 今タップしたマスが正しいパターンと一致するか確認
+            if (playerInput[lastPlayerTapIndex] !== pattern[lastPlayerTapIndex]) {
+                // 不正解の場合、ゲームオーバー
+                gameOver(false);
+                return;
+            }
+
+            // 全てのパターンを正しく再現できたか確認
+            if (playerInput.length === pattern.length) {
+                // 正解の場合、次のラウンドへ
+                setTimeout(() => {
+                    gameOver(true); // 正解時の処理（視覚フィードバックと次のラウンドへ）
+                }, 300); // 少し間を置いてから次の処理へ
+            }
+            // まだ入力途中であれば何もしない
+        }
+        
+        /**
+         * ゲームオーバー処理（正解時と不正解時で共通化）
+         * @param {boolean} isWin - trueなら正解、falseなら不正解
+         */
+        function gameOver(isWin) {
+            isPlayerTurn = false; // プレイヤーの入力を無効化
+            allowTap = false; // ゲームオーバー中はタップ無効
+            resetTileStyles(); // 全てのタイルからハイライトを削除
+            
+            if (isWin) {
+                // 全てのタイルを正解色にする演出
+                const tiles = document.querySelectorAll('.tile');
+                tiles.forEach(tile => tile.classList.add('correct'));
+                
+                messageEl.textContent = '正解！次のレベルへ！';
+                score++; // スコア加算
+                updateScore();
+                level++; // レベルアップ
+                setTimeout(nextRound, ROUND_END_PAUSE_DURATION); // 少し待ってから次のラウンドを開始
+            } else {
+                // 不正解の場合、最後に間違えたタイルを不正解色にする
+                const wrongTileIndex = playerInput[playerInput.length - 1];
+                const wrongTile = document.querySelector(`.tile[data-index="${wrongTileIndex}"]`);
+                if (wrongTile) {
+                    wrongTile.classList.add('wrong');
+                }
+                
+                messageEl.textContent = `残念！ゲームオーバー！最終スコア: ${score}`;
+                retryButton.classList.remove('hidden'); // リトライボタンを表示
+                startButton.classList.add('hidden'); // スタートボタンは隠す
+            }
+        }
+
+        /**
+         * 次のラウンドを開始します。
+         */
+        function nextRound() {
+            resetTileStyles(); // 前のラウンドのスタイルをリセット
+            messageEl.textContent = `レベル ${level} スタート！`;
+            generatePattern(); // 新しいパターンを生成
+            setTimeout(displayPattern, INITIAL_ROUND_DELAY); // 少し待ってからパターン表示を開始
+        }
+
+        // イベントリスナーの設定
+
+        // スタートボタンがクリックされた時
+        startButton.addEventListener('click', () => {
+            startButton.classList.add('hidden'); // スタートボタンを隠す
+            nextRound(); // 最初のラウンドを開始
+        });
+
+        // リトライボタンがクリックされた時
+        retryButton.addEventListener('click', () => {
+            initGame(); // ゲームを初期化してリトライ
+        });
+
+        // ページが完全に読み込まれた時にゲームを初期化
+        document.addEventListener('DOMContentLoaded', initGame);
+
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

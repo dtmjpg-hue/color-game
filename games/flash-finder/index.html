@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>フラッシュメモリーゲーム</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0;
+            color: #333;
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none; /* Standard syntax */
+            flex-direction: column; /* 縦画面対応 */
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            padding: 20px;
+            background-color: #fff;
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            max-width: 90vw; /* スマホで画面いっぱいに広がらないように */
+            width: 400px; /* PCなど広い画面での最大幅 */
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: #4CAF50;
+            margin-top: 0;
+            font-size: 1.8em;
+        }
+
+        #score-display, #message-display {
+            font-size: 1.3em;
+            font-weight: bold;
+            text-align: center;
+            min-height: 1.5em; /* メッセージの表示時にレイアウトが崩れないように */
+        }
+
+        #grid-container {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr); /* 3x3グリッド */
+            gap: 10px;
+            width: 100%; /* 親要素の幅に合わせて広がる */
+            max-width: 300px; /* グリッド自体の最大幅 */
+        }
+
+        .tile {
+            background-color: #b0e0e6; /* 通常のタイルの色 (水色) */
+            border-radius: 8px;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            cursor: pointer;
+            transition: background-color 0.2s ease-in-out;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+            position: relative; /* 子要素を絶対配置するために必要 */
+            padding-top: 100%; /* 高さを幅に合わせるためのハック (正方形を維持) */
+            box-sizing: border-box; /* paddingが幅に含まれるように */
+            overflow: hidden; /* 万が一、内容がはみ出さないように */
+        }
+        
+        /* spanの中身を中央配置するためのスタイル */
+        .tile span {
+             position: absolute;
+             top: 50%;
+             left: 50%;
+             transform: translate(-50%, -50%);
+             white-space: nowrap; /* テキストが改行されないように */
+        }
+
+        .tile.highlight {
+            background-color: #ffd700; /* 光るタイルの色 (金色) */
+            box-shadow: 0 0 15px #ffd700;
+        }
+
+        .tile:active {
+            transform: scale(0.95);
+            transition: transform 0.1s ease-out;
+        }
+
+        #retry-button {
+            padding: 12px 25px;
+            font-size: 1.2em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        #retry-button:hover {
+            background-color: #45a049;
+        }
+
+        #retry-button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <h1>フラッシュメモリーゲーム</h1>
+        <div id="score-display">スコア: 0</div>
+        <div id="message-display">「スタート」をタップしてゲーム開始</div>
+        <div id="grid-container">
+            <!-- タイルはJavaScriptでここに生成されます -->
+        </div>
+        <button id="retry-button">スタート</button>
+    </div>
+
+    <script>
+        const GRID_SIZE = 3; // N x N グリッド
+        const HIGHLIGHT_DURATION = 800; // 光っている時間 (ms)
+        const PAUSE_DURATION = 1200; // 光ってからユーザー入力受付までの間隔、またはラウンド間の間隔 (ms)
+        const CLICK_TIMEOUT_DURATION = 3000; // ユーザーがタイルをタップできる時間 (ms)
+
+        let score = 0;
+        let isGaming = false;
+        let highlightedTileIndex = -1;
+        let canClick = false;
+        let clickTimer = null; // ユーザーの入力受付タイムアウト用タイマー
+
+        const tiles = []; // タイルDOM要素を格納
+        let gridContainer, scoreDisplay, messageDisplay, retryButton;
+
+        document.addEventListener('DOMContentLoaded', initGame);
+
+        function initGame() {
+            gridContainer = document.getElementById('grid-container');
+            scoreDisplay = document.getElementById('score-display');
+            messageDisplay = document.getElementById('message-display');
+            retryButton = document.getElementById('retry-button');
+
+            generateGrid();
+            retryButton.addEventListener('click', startGame);
+            updateScoreDisplay();
+            messageDisplay.textContent = '「スタート」をタップしてゲーム開始';
+            retryButton.textContent = 'スタート';
+            retryButton.style.display = 'block';
+            isGaming = false;
+            canClick = false;
+        }
+
+        function generateGrid() {
+            gridContainer.innerHTML = ''; // 既存のタイルをクリア
+            tiles.length = 0; // 配列もクリア
+
+            for (let i = 0; i < GRID_SIZE * GRID_SIZE; i++) {
+                const tile = document.createElement('div');
+                tile.classList.add('tile');
+                tile.dataset.index = i; // データ属性にインデックスを保持
+                const tileNumberSpan = document.createElement('span');
+                tileNumberSpan.textContent = i + 1; // 1から始まる番号
+                tile.appendChild(tileNumberSpan);
+                tile.addEventListener('click', handleTileClick);
+                gridContainer.appendChild(tile);
+                tiles.push(tile);
+            }
+        }
+
+        function startGame() {
+            score = 0;
+            updateScoreDisplay();
+            isGaming = true;
+            canClick = false;
+            retryButton.style.display = 'none';
+            messageDisplay.textContent = 'よーい...';
+            clearTimeout(clickTimer); // 既存のタイマーがあればクリア
+            setTimeout(startRound, PAUSE_DURATION);
+        }
+
+        function startRound() {
+            if (!isGaming) return;
+
+            canClick = false;
+            messageDisplay.textContent = 'どこだ？';
+            clearTimeout(clickTimer);
+
+            // 全てのタイルからハイライトを削除
+            tiles.forEach(tile => removeHighlight(tile));
+
+            // ランダムなタイルを選択
+            highlightedTileIndex = Math.floor(Math.random() * (GRID_SIZE * GRID_SIZE));
+            const targetTile = tiles[highlightedTileIndex];
+
+            // 選択したタイルをハイライト
+            addHighlight(targetTile);
+
+            // 一定時間後、ハイライトを解除し、ユーザーの入力を待つ
+            setTimeout(() => {
+                removeHighlight(targetTile);
+                messageDisplay.textContent = 'タップしてください';
+                canClick = true; // クリック受付開始
+                // ユーザーがタップできる時間のタイムアウトを設定
+                clickTimer = setTimeout(() => {
+                    if (isGaming && canClick) { // まだゲーム中で、クリック受付状態ならタイムアウト
+                        gameOver(false); // タイムアウトによるゲームオーバー
+                    }
+                }, CLICK_TIMEOUT_DURATION);
+            }, HIGHLIGHT_DURATION);
+        }
+
+        function handleTileClick(event) {
+            if (!isGaming || !canClick) {
+                return;
+            }
+
+            canClick = false; // 連続クリック防止
+            clearTimeout(clickTimer); // ユーザーがタップしたのでタイムアウトをクリア
+
+            const clickedTileElement = event.target.closest('.tile');
+            if (!clickedTileElement) return; // 親要素がタイルでなければ何もしない
+
+            const clickedTileIndex = parseInt(clickedTileElement.dataset.index);
+
+            if (clickedTileIndex === highlightedTileIndex) {
+                score++;
+                updateScoreDisplay();
+                messageDisplay.textContent = '正解！';
+                setTimeout(startRound, PAUSE_DURATION); // 次のラウンドへ
+            } else {
+                gameOver(true); // 不正解によるゲームオーバー
+            }
+        }
+
+        function gameOver(incorrectGuess) {
+            isGaming = false;
+            canClick = false; // クリック受付終了
+            clearTimeout(clickTimer);
+
+            let gameOverMessage = 'ゲームオーバー！';
+            if (incorrectGuess) {
+                gameOverMessage += `不正解！正解は${highlightedTileIndex + 1}番でした。`;
+                addHighlight(tiles[highlightedTileIndex]); // 正解のタイルを表示
+            } else {
+                gameOverMessage += `時間切れ！正解は${highlightedTileIndex + 1}番でした。`;
+                addHighlight(tiles[highlightedTileIndex]); // 正解のタイルを表示
+            }
+            messageDisplay.textContent = gameOverMessage;
+
+            retryButton.textContent = 'リトライ';
+            retryButton.style.display = 'block';
+        }
+
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = `スコア: ${score}`;
+        }
+
+        function addHighlight(tileElement) {
+            if (tileElement) {
+                tileElement.classList.add('highlight');
+            }
+        }
+
+        function removeHighlight(tileElement) {
+            if (tileElement) {
+                tileElement.classList.remove('highlight');
+            }
+        }
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

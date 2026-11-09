@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>方向チェンジ</title>
+    <style>
+        /* CSS */
+        body {
+            margin: 0;
+            overflow: hidden;
+            height: 100vh;
+            width: 100vw;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            background-color: #222;
+            color: white;
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none;    /* Firefox */
+            -ms-user-select: none;     /* Internet Explorer/Edge */
+            user-select: none;         /* Standard */
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .overlay.hidden {
+            display: none;
+        }
+
+        .overlay h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            color: #4CAF50; /* Green */
+        }
+
+        .overlay p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin: 5px 0;
+            max-width: 80%;
+        }
+
+        button {
+            padding: 15px 35px;
+            font-size: 1.3em;
+            margin-top: 30px;
+            cursor: pointer;
+            background-color: #007bff; /* Blue */
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+
+        button:active {
+            background-color: #0056b3;
+            transform: translateY(2px);
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            width: 100%;
+        }
+
+        #score-display {
+            padding: 15px;
+            font-size: 1.6em;
+            text-align: center;
+            background-color: #333;
+            color: white;
+            flex-shrink: 0;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        #game-area {
+            position: relative;
+            flex-grow: 1;
+            background-color: #f0f0f0;
+            overflow: hidden;
+            touch-action: none; /* Disable default touch behaviors like zoom */
+        }
+
+        #player {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            background-color: #ff6347; /* Tomato */
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            z-index: 100;
+            box-shadow: 0 0 15px rgba(255, 99, 71, 0.8);
+        }
+
+        .tap-area {
+            position: absolute;
+            opacity: 0; /* Initially transparent */
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: background-color 0.1s ease-out;
+            box-sizing: border-box; /* Padding/border includes total size */
+            z-index: 50; /* Below player, above game-area */
+        }
+
+        .tap-area.highlight {
+            background-color: rgba(0, 255, 0, 0.15); /* Light green tint */
+            opacity: 1;
+            border: 2px solid rgba(0, 255, 0, 0.6);
+        }
+
+        #tap-area-up { top: 0; left: 0; width: 100%; height: 30%; }
+        #tap-area-down { bottom: 0; left: 0; width: 100%; height: 30%; }
+        #tap-area-left { top: 30%; left: 0; width: 50%; height: 40%; }
+        #tap-area-right { top: 30%; right: 0; width: 50%; height: 40%; }
+
+    </style>
+</head>
+<body>
+    <div id="game-start-screen" class="overlay">
+        <h1>方向チェンジ</h1>
+        <p>画面中央のオブジェクトが移動します。</p>
+        <p>オブジェクトの移動方向と同じ方向をタップして、</p>
+        <p>画面外に出さないようにスコアを稼ぎましょう！</p>
+        <button id="start-button">スタート</button>
+    </div>
+
+    <div id="game-over-screen" class="overlay hidden">
+        <h1>ゲームオーバー</h1>
+        <p>スコア: <span id="final-score">0</span></p>
+        <button id="retry-button">もう一度</button>
+    </div>
+
+    <div id="game-container">
+        <div id="score-display">スコア: <span id="current-score">0</span></div>
+        <div id="game-area">
+            <div id="tap-area-up" class="tap-area" data-direction="up"></div>
+            <div id="tap-area-down" class="tap-area" data-direction="down"></div>
+            <div id="tap-area-left" class="tap-area" data-direction="left"></div>
+            <div id="tap-area-right" class="tap-area" data-direction="right"></div>
+            <div id="player"></div>
+        </div>
+    </div>
+
+    <script>
+        /* JavaScript */
+        const player = document.getElementById('player');
+        const scoreDisplay = document.getElementById('current-score');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const gameArea = document.getElementById('game-area');
+        const tapAreas = document.querySelectorAll('.tap-area');
+        const startScreen = document.getElementById('game-start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+
+        // Game variables
+        let gameRunning = false;
+        let score = 0;
+        let playerX, playerY; // Player's center coordinates
+        let playerDx, playerDy; // Player's direction (-1, 0, 1)
+        let playerSpeed;
+        let gameLoopId;
+        let lastDirectionChangeTime = 0;
+        let directionChangeInterval; // milliseconds
+        let gameAreaWidth, gameAreaHeight;
+
+        // Game constants
+        const PLAYER_SIZE = 40; // px
+        const INITIAL_PLAYER_SPEED = 3; // px per frame
+        const PUSHBACK_AMOUNT = 30; // px - amount player is pushed back towards center on correct tap
+        const INITIAL_DIRECTION_CHANGE_INTERVAL = 1500; // ms
+        const MIN_DIRECTION_CHANGE_INTERVAL = 400; // ms
+        const SPEED_INCREASE_FACTOR = 0.1; // Amount to increase speed per difficulty level
+        const INTERVAL_DECREASE_FACTOR = 70; // ms to decrease interval per difficulty level
+        const SCORE_THRESHOLD_FOR_DIFFICULTY = 5; // Score points to increase difficulty
+
+        // --- Game Setup Functions ---
+
+        function updateGameAreaDimensions() {
+            const rect = gameArea.getBoundingClientRect();
+            gameAreaWidth = rect.width;
+            gameAreaHeight = rect.height;
+        }
+
+        function initGame() {
+            score = 0;
+            playerSpeed = INITIAL_PLAYER_SPEED;
+            directionChangeInterval = INITIAL_DIRECTION_CHANGE_INTERVAL;
+
+            updateGameAreaDimensions();
+            playerX = gameAreaWidth / 2;
+            playerY = gameAreaHeight / 2;
+
+            updatePlayerPosition();
+            changeDirection();
+            updateScoreDisplay();
+
+            gameOverScreen.classList.add('hidden');
+            startScreen.classList.remove('hidden'); // Ensure start screen is visible for play
+            gameRunning = false;
+        }
+
+        function startGame() {
+            startScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            gameRunning = true;
+            lastDirectionChangeTime = Date.now();
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- Game Logic Functions ---
+
+        function updatePlayerPosition() {
+            player.style.left = `${playerX}px`;
+            player.style.top = `${playerY}px`;
+        }
+
+        function changeDirection() {
+            const directions = [
+                { dx: 0, dy: -1, dir: 'up' }, // Up
+                { dx: 0, dy: 1, dir: 'down' }, // Down
+                { dx: -1, dy: 0, dir: 'left' }, // Left
+                { dx: 1, dy: 0, dir: 'right' }  // Right
+            ];
+            const randomIndex = Math.floor(Math.random() * directions.length);
+            const newDirection = directions[randomIndex];
+            playerDx = newDirection.dx;
+            playerDy = newDirection.dy;
+            player.dataset.currentDirection = newDirection.dir; // Store current direction for highlighting
+            lastDirectionChangeTime = Date.now();
+        }
+
+        function highlightTapArea() {
+            tapAreas.forEach(area => {
+                area.classList.remove('highlight');
+            });
+            const currentDir = player.dataset.currentDirection;
+            const activeTapArea = document.querySelector(`.tap-area[data-direction="${currentDir}"]`);
+            if (activeTapArea) {
+                activeTapArea.classList.add('highlight');
+            }
+        }
+
+        function applyTapEffect() {
+            // Push player back towards the center
+            const centerX = gameAreaWidth / 2;
+            const centerY = gameAreaHeight / 2;
+
+            if (playerX < centerX) {
+                playerX = Math.min(centerX, playerX + PUSHBACK_AMOUNT);
+            } else {
+                playerX = Math.max(centerX, playerX - PUSHBACK_AMOUNT);
+            }
+
+            if (playerY < centerY) {
+                playerY = Math.min(centerY, playerY + PUSHBACK_AMOUNT);
+            } else {
+                playerY = Math.max(centerY, playerY - PUSHBACK_AMOUNT);
+            }
+            updatePlayerPosition();
+        }
+
+        function increaseDifficulty() {
+            playerSpeed += SPEED_INCREASE_FACTOR;
+            directionChangeInterval = Math.max(MIN_DIRECTION_CHANGE_INTERVAL, directionChangeInterval - INTERVAL_DECREASE_FACTOR);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            cancelAnimationFrame(gameLoopId);
+            finalScoreDisplay.textContent = score;
+            gameOverScreen.classList.remove('hidden');
+            tapAreas.forEach(area => area.classList.remove('highlight')); // Clear highlights
+        }
+
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = score;
+        }
+
+        // --- Main Game Loop ---
+
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            // Update game area dimensions in case of device rotation/resize
+            updateGameAreaDimensions();
+
+            // Player movement
+            playerX += playerDx * playerSpeed;
+            playerY += playerDy * playerSpeed;
+            updatePlayerPosition();
+
+            // Boundary check
+            if (playerX - PLAYER_SIZE / 2 < 0 || playerX + PLAYER_SIZE / 2 > gameAreaWidth ||
+                playerY - PLAYER_SIZE / 2 < 0 || playerY + PLAYER_SIZE / 2 > gameAreaHeight) {
+                gameOver();
+                return;
+            }
+
+            // Direction change
+            if (Date.now() - lastDirectionChangeTime > directionChangeInterval) {
+                changeDirection();
+            }
+
+            // Highlight tap area
+            highlightTapArea();
+
+            gameLoopId = requestAnimationFrame(gameLoop);
+        }
+
+        // --- Event Listeners ---
+
+        startButton.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            startGame();
+        });
+        retryButton.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            initGame();
+            startGame();
+        });
+
+        tapAreas.forEach(area => {
+            area.addEventListener('touchstart', (e) => {
+                e.preventDefault(); // Prevent default browser touch actions (e.g., scrolling, zooming)
+                if (!gameRunning) return;
+
+                const tappedDirection = e.currentTarget.dataset.direction;
+                const currentMovementDirection = player.dataset.currentDirection;
+
+                if (tappedDirection === currentMovementDirection) {
+                    score++;
+                    updateScoreDisplay();
+                    applyTapEffect(); // Push player back towards center
+                    if (score > 0 && score % SCORE_THRESHOLD_FOR_DIFFICULTY === 0) {
+                        increaseDifficulty();
+                    }
+                }
+                // No penalty for incorrect tap, just no score/effect
+            });
+        });
+
+        // Initialize game on load
+        initGame();
+
+        // Prevent unwanted touch behaviors globally
+        document.addEventListener('touchmove', (e) => {
+            if (gameRunning) e.preventDefault();
+        }, { passive: false });
+        document.addEventListener('gesturestart', (e) => {
+            if (gameRunning) e.preventDefault();
+        }, { passive: false });
+
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

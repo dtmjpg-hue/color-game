@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>サイズ維持ゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column; /* 縦画面を想定 */
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* Internet Explorer/Edge */
+            user-select: none; /* Non-prefixed version */
+            overflow: hidden; /* スクロールを禁止 */
+        }
+
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(255, 255, 255, 0.95);
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 100;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        h1 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }
+
+        p {
+            margin-bottom: 15px;
+            line-height: 1.6;
+            max-width: 300px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #game-screen {
+            background-color: #eee;
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: flex-start; /* スコアを上部に */
+            align-items: center;
+            overflow: hidden;
+        }
+
+        #score-display {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+            margin-top: 30px;
+            margin-bottom: 20px;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
+
+        #game-area {
+            flex-grow: 1; /* 残りのスペースを全て占有 */
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            position: relative;
+            touch-action: none; /* ピンチズームなどを無効化 */
+        }
+
+        /* 目標範囲と図形 */
+        #target-ring-outer,
+        #target-ring-inner,
+        #shape {
+            position: absolute;
+            border-radius: 50%; /* 円形 */
+            box-sizing: border-box;
+        }
+
+        /* 外側の目標範囲のリング (最大サイズ) */
+        #target-ring-outer {
+            width: 130px; /* MAX_TARGET_SIZE */
+            height: 130px; /* MAX_TARGET_SIZE */
+            border: 5px solid rgba(76, 175, 80, 0.6); /* 緑色の目標範囲 */
+            z-index: 1;
+        }
+        /* 内側の目標範囲のリング (最小サイズ) */
+        #target-ring-inner {
+            width: 70px; /* MIN_TARGET_SIZE */
+            height: 70px; /* MIN_TARGET_SIZE */
+            border: 5px solid rgba(76, 175, 80, 0.6); /* 緑色の目標範囲 */
+            z-index: 1;
+        }
+
+        /* 成長・収縮する図形 */
+        #shape {
+            background-color: #2196F3; /* 青い図形 */
+            width: 50px; /* INITIAL_SIZE */
+            height: 50px; /* INITIAL_SIZE */
+            z-index: 2;
+            transition: background-color 0.1s ease-out; /* スコア判定時の色変化用 */
+        }
+
+        #game-over-screen h2 {
+            color: #D32F2F;
+            margin-bottom: 15px;
+        }
+        #game-over-screen p {
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- イントロ画面 -->
+    <div id="intro-screen" class="screen">
+        <h1>サイズ維持ゲーム</h1>
+        <p>画面中央の図形をタップして成長させます。</p>
+        <p>タップを止めると収縮します。</p>
+        <p>図形を緑色の範囲内に保ち続けるとスコアが増えます。</p>
+        <button id="start-button">スタート</button>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen" class="screen hidden">
+        <div id="score-display">スコア: 0</div>
+        <div id="game-area">
+            <!-- 目標範囲表示 (緑色のリング) -->
+            <div id="target-ring-outer"></div>
+            <div id="target-ring-inner"></div>
+            <!-- 動く図形 -->
+            <div id="shape"></div>
+        </div>
+    </div>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="game-over-screen" class="screen hidden">
+        <h2>ゲームオーバー</h2>
+        <p id="final-score">最終スコア: 0</p>
+        <button id="retry-button">リトライ</button>
+    </div>
+
+    <script>
+        const introScreen = document.getElementById('intro-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const gameArea = document.getElementById('game-area');
+        const shape = document.getElementById('shape');
+
+        let gameRunning = false;
+        let currentSize;
+        let score;
+        let isTapping = false;
+        let gameLoopIntervalId;
+
+        // ゲーム定数
+        const INITIAL_SIZE = 50; // 開始時の図形のサイズ (px)
+        const MIN_TARGET_SIZE = 70; // 目標最小サイズ (px)
+        const MAX_TARGET_SIZE = 130; // 目標最大サイズ (px)
+        const GROWTH_RATE = 1.5; // タップ時の成長速度 (px/frame)
+        const SHRINK_RATE = 1.0; // タップ停止時の収縮速度 (px/frame)
+        const GAME_LOOP_INTERVAL = 16; // ゲームループの間隔 (ms, 約60fps)
+        const SCORE_PER_FRAME = 1; // 目標範囲内にいるときのスコア加算量
+
+        function initGame() {
+            score = 0;
+            currentSize = INITIAL_SIZE;
+            isTapping = false;
+            gameRunning = false;
+
+            scoreDisplay.textContent = `スコア: ${score}`;
+            shape.style.width = `${currentSize}px`;
+            shape.style.height = `${currentSize}px`;
+            shape.style.backgroundColor = '#2196F3'; // 初期色に戻す
+
+            introScreen.classList.remove('hidden');
+            gameScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+
+            if (gameLoopIntervalId) {
+                clearInterval(gameLoopIntervalId);
+            }
+        }
+
+        function startGame() {
+            introScreen.classList.add('hidden');
+            gameOverScreen.classList.add('hidden');
+            gameScreen.classList.remove('hidden');
+
+            score = 0;
+            currentSize = INITIAL_SIZE;
+            isTapping = false;
+            gameRunning = true;
+            scoreDisplay.textContent = `スコア: ${score}`;
+            shape.style.width = `${currentSize}px`;
+            shape.style.height = `${currentSize}px`;
+            shape.style.backgroundColor = '#2196F3'; // ゲーム開始時の図形の色
+
+            gameLoopIntervalId = setInterval(gameLoop, GAME_LOOP_INTERVAL);
+        }
+
+        function gameOver() {
+            gameRunning = false;
+            clearInterval(gameLoopIntervalId);
+            finalScoreDisplay.textContent = `最終スコア: ${score}`;
+            gameScreen.classList.add('hidden');
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        function gameLoop() {
+            if (!gameRunning) return;
+
+            // サイズの更新
+            if (isTapping) {
+                currentSize += GROWTH_RATE;
+            } else {
+                currentSize -= SHRINK_RATE;
+            }
+
+            // サイズが負にならないようにする
+            if (currentSize < 0) {
+                currentSize = 0;
+            }
+
+            // 図形のサイズを更新
+            shape.style.width = `${currentSize}px`;
+            shape.style.height = `${currentSize}px`;
+
+            // スコア判定とゲームオーバー判定
+            if (currentSize >= MIN_TARGET_SIZE && currentSize <= MAX_TARGET_SIZE) {
+                score += SCORE_PER_FRAME;
+                shape.style.backgroundColor = '#2196F3'; // 目標範囲内は青
+            } else {
+                // 目標範囲外に出たらゲームオーバー
+                shape.style.backgroundColor = '#D32F2F'; // 赤色に変化
+                gameOver();
+                return; // ゲームオーバーになったら以降の処理は不要
+            }
+
+            scoreDisplay.textContent = `スコア: ${score}`;
+        }
+
+        // イベントリスナー
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame); // リトライ時はstartGameを呼ぶ
+
+        // タップ/クリック開始イベント
+        const handleTapStart = (e) => {
+            if (!gameRunning) return;
+            isTapping = true;
+            e.preventDefault(); // デフォルトの動作 (スクロール、ズームなど) をキャンセル
+        };
+
+        // タップ/クリック終了イベント
+        const handleTapEnd = (e) => {
+            if (!gameRunning) return;
+            isTapping = false;
+            e.preventDefault();
+        };
+
+        // タッチイベント (スマホ用)
+        gameArea.addEventListener('touchstart', handleTapStart, { passive: false });
+        gameArea.addEventListener('touchend', handleTapEnd, { passive: false });
+        gameArea.addEventListener('touchcancel', handleTapEnd, { passive: false }); // 指が画面外に出た場合など
+        
+        // マウスイベント (PCテスト用)
+        gameArea.addEventListener('mousedown', handleTapStart, { passive: false });
+        gameArea.addEventListener('mouseup', handleTapEnd, { passive: false });
+        gameArea.addEventListener('mouseleave', handleTapEnd, { passive: false }); // マウスがエリア外に出た場合
+
+        // ゲームの初期化
+        initGame();
+
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

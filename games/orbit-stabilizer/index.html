@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>プラネット・アライナー</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #000; /* 全体の背景は宇宙空間 */
+            font-family: 'Arial', sans-serif;
+            color: #fff;
+            /* スマホでのテキスト選択やピンチズームを無効化 */
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none; /* Standard syntax */
+        }
+        canvas {
+            display: block;
+            background-color: #050510; /* ゲームの背景色 */
+            touch-action: none; /* タップでのスクロール・ズームを無効化 */
+        }
+        #game-ui {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            pointer-events: none; /* UI要素の下にあるCanvasをタップ可能にする */
+        }
+        #score-display {
+            font-size: 2em;
+            margin-top: 20px;
+            pointer-events: auto; /* スコア表示自体はタップ不可 */
+            text-shadow: 0 0 5px #fff;
+        }
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7); /* 半透明の黒いオーバーレイ */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            pointer-events: none; /* 初期状態ではクリック不可 */
+            opacity: 0;
+            transition: opacity 0.3s ease-in-out; /* フェードイン・アウト */
+        }
+        #game-over-screen.active {
+            opacity: 1;
+            pointer-events: auto; /* アクティブ時にクリック可能にする */
+        }
+        #game-over-screen h2 {
+            font-size: 3em;
+            margin-bottom: 20px;
+            color: #FFD700; /* Gold */
+            text-shadow: 0 0 10px #FFD700;
+        }
+        #game-over-screen p {
+            font-size: 1.5em;
+            margin-bottom: 30px;
+            color: #EEE;
+        }
+        #retry-button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            background-color: #4CAF50; /* 緑色のボタン */
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            box-shadow: 0 5px 10px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.2s ease-in-out;
+            pointer-events: auto;
+        }
+        #retry-button:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="game-ui">
+        <div id="score-display">スコア: 0</div>
+        <div id="game-over-screen">
+            <h2>ゲームオーバー！</h2>
+            <p>最終スコア: <span id="final-score">0</span></p>
+            <button id="retry-button">リトライ</button>
+        </div>
+    </div>
+    <script>
+        // --- グローバル変数 ---
+        let canvas, ctx;
+        let score = 0;
+        let gameOver = false;
+        let animationFrameId;
+        let lastTimestamp = 0;
+
+        // --- ゲームオブジェクト ---
+        let planet;
+        let satellites = []; // 不規則軌道で周回する衛星
+        let stableSatellites = []; // 安定軌道で周回する衛星
+
+        // --- ゲームの状態とカウンター ---
+        let lostSatellitesCount = 0; // 失われた衛星の数
+        let lastSatelliteSpawnTime = 0; // 最後に衛星が生成された時刻
+
+        // --- ゲーム設定 ---
+        const PLANET_COLOR = '#42A5F5'; // 惑星の色 (青)
+        const SATELLITE_COLOR = '#BBDEFB'; // 衛星の色 (明るい青)
+        const TARGET_RING_COLOR = '#FFD700'; // ターゲットリングの色 (金)
+        const STABLE_SATELLITE_COLOR = '#8BC34A'; // 安定した衛星の色 (緑)
+
+        const PLANET_RADIUS_RATIO = 0.12; // 画面の短い辺に対する惑星の半径比率
+        const SATELLITE_RADIUS = 8; // 衛星の半径（ピクセル）
+
+        const TARGET_RING_RADIUS_RATIO = 0.4; // 画面の短い辺に対するターゲットリングの半径比率
+        const RING_TOLERANCE = 10; // ターゲットリングの許容範囲（ピクセル）
+
+        const INITIAL_ORBIT_RADIUS_MIN_RATIO = 0.2; // 初期軌道半径の最小比率
+        const INITIAL_ORBIT_RADIUS_MAX_RATIO = 0.45; // 初期軌道半径の最大比率
+
+        const SATELLITE_SPAWN_INTERVAL = 1500; // 衛星が生成される間隔（ミリ秒）
+        const MAX_SATELLITES_LOSE = 5; // 何個衛星を失ったらゲームオーバーか
+        const SATELLITE_LIFESPAN = 5000; // 衛星がタップされずに消滅するまでの時間（ミリ秒）
+        const MAX_ACTIVE_SATELLITES = 5; // 同時に存在する不規則軌道の衛星の最大数
+
+        // --- 衛星の動きに関する設定 ---
+        const ANGULAR_SPEED_BASE = 0.0005; // 基本角速度（ラジアン/ミリ秒）
+        const ANGULAR_SPEED_VARIANCE = 0.000005; // 角速度の変化幅（ラジアン/ミリ秒）
+        const ORBIT_RADIUS_VARIANCE = 0.005; // 軌道半径の変化幅（ピクセル/ミリ秒）
+
+        // --- UI要素 ---
+        let scoreDisplay;
+        let gameOverScreen;
+        let finalScoreDisplay;
+        let retryButton;
+
+        // --- ヘルパー関数 ---
+        // 2点間の距離を計算
+        function getDistance(x1, y1, x2, y2) {
+            return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+        }
+
+        // 範囲内のランダムな値を生成
+        function getRandom(min, max) {
+            return Math.random() * (max - min) + min;
+        }
+
+        // --- ゲームオブジェクトクラス ---
+        class Planet {
+            constructor(x, y, radius, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius;
+                this.color = color;
+            }
+
+            draw(ctx) {
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                ctx.fill();
+            }
+        }
+
+        class Satellite {
+            constructor(planetX, planetY) {
+                this.planetX = planetX;
+                this.planetY = planetY;
+                this.radius = SATELLITE_RADIUS;
+                this.color = SATELLITE_COLOR;
+                this.opacity = 1;
+
+                this.stable = false;
+                this.tapped = false; // 一度タップされたらそれ以上タップできないようにするフラグ
+
+                // 初期軌道のランダム設定
+                const minDim = Math.min(canvas.width, canvas.height);
+                this.currentOrbitRadius = getRandom(minDim * INITIAL_ORBIT_RADIUS_MIN_RATIO, minDim * INITIAL_ORBIT_RADIUS_MAX_RATIO);
+                this.currentAngle = getRandom(0, Math.PI * 2);
+                this.currentAngularSpeed = getRandom(ANGULAR_SPEED_BASE * 0.8, ANGULAR_SPEED_BASE * 1.2);
+                this.direction = Math.random() < 0.5 ? 1 : -1; // 時計回りか反時計回りか
+
+                // 初期位置計算
+                this.x = this.planetX + Math.cos(this.currentAngle) * this.currentOrbitRadius;
+                this.y = this.planetY + Math.sin(this.currentAngle) * this.currentOrbitRadius;
+
+                this.spawnTime = performance.now(); // 生成時刻
+            }
+
+            update(deltaTime) {
+                if (this.stable) {
+                    // 安定軌道の場合、固定されたパラメータで周回
+                    this.currentAngle += this.stableAngularSpeed * this.direction * deltaTime;
+                    this.x = this.planetX + Math.cos(this.currentAngle) * this.stableOrbitRadius;
+                    this.y = this.planetY + Math.sin(this.currentAngle) * this.stableOrbitRadius;
+                } else {
+                    // 不規則軌道の場合、角速度と軌道半径を変動させる
+                    this.currentAngle += this.currentAngularSpeed * this.direction * deltaTime;
+
+                    // 角速度をランダムに変化させる
+                    this.currentAngularSpeed += getRandom(-ANGULAR_SPEED_VARIANCE, ANGULAR_SPEED_VARIANCE) * deltaTime;
+                    // 速度を適切な範囲に制限
+                    this.currentAngularSpeed = Math.max(ANGULAR_SPEED_BASE * 0.2, Math.min(ANGULAR_SPEED_BASE * 2, this.currentAngularSpeed)); 
+
+                    // 軌道半径をランダムに変化させる
+                    const orbitChange = getRandom(-ORBIT_RADIUS_VARIANCE, ORBIT_RADIUS_VARIANCE) * deltaTime;
+                    this.currentOrbitRadius += orbitChange;
+                    // 軌道半径が惑星に近づきすぎたり、画面外に出すぎたりしないように制限
+                    const minDim = Math.min(canvas.width, canvas.height);
+                    this.currentOrbitRadius = Math.max(planet.radius + this.radius * 2, Math.min(minDim * 0.49, this.currentOrbitRadius));
+
+                    this.x = this.planetX + Math.cos(this.currentAngle) * this.currentOrbitRadius;
+                    this.y = this.planetY + Math.sin(this.currentAngle) * this.currentOrbitRadius;
+
+                    // 寿命切れチェック
+                    if (performance.now() - this.spawnTime > SATELLITE_LIFESPAN) {
+                        this.opacity -= deltaTime * 0.001; // 約1秒かけてフェードアウト
+                        if (this.opacity <= 0) {
+                            lostSatellitesCount++;
+                            this.tapped = true; // 寿命切れで消える場合もタップ済み扱い
+                            return true; // この衛星は削除すべきであることを示す
+                        }
+                    }
+                }
+                return false; // この衛星はまだ削除すべきではない
+            }
+
+            draw(ctx) {
+                ctx.save();
+                ctx.globalAlpha = this.opacity;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fillStyle = this.stable ? STABLE_SATELLITE_COLOR : this.color;
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        // --- ゲームロジック ---
+        function initGame() {
+            canvas = document.getElementById('gameCanvas');
+            ctx = canvas.getContext('2d');
+            scoreDisplay = document.getElementById('score-display');
+            gameOverScreen = document.getElementById('game-over-screen');
+            finalScoreDisplay = document.getElementById('final-score');
+            retryButton = document.getElementById('retry-button');
+
+            retryButton.addEventListener('click', resetGame);
+            canvas.addEventListener('touchstart', handleTap);
+            window.addEventListener('resize', resizeCanvas); // 画面サイズ変更時にも対応
+
+            resizeCanvas(); // 初回キャンバスサイズ設定
+            resetGame(); // ゲームを初期化して開始
+        }
+
+        function resizeCanvas() {
+            // スマホの縦画面を想定し、アスペクト比を9:16に固定する (またはそれに近い比率)
+            const desiredAspectRatio = 9 / 16;
+            let newWidth = window.innerWidth;
+            let newHeight = window.innerHeight;
+
+            if (newWidth / newHeight > desiredAspectRatio) {
+                // ウィンドウが望ましいアスペクト比より横長の場合、高さを基準に幅を調整
+                newWidth = newHeight * desiredAspectRatio;
+            } else {
+                // ウィンドウが望ましいアスペクト比より縦長の場合、幅を基準に高さを調整
+                newHeight = newWidth / desiredAspectRatio;
+            }
+
+            canvas.width = newWidth;
+            canvas.height = newHeight;
+
+            // 惑星の位置と半径を新しいキャンバスサイズに合わせて再計算
+            const minDim = Math.min(canvas.width, canvas.height);
+            planet = new Planet(canvas.width / 2, canvas.height / 2, minDim * PLANET_RADIUS_RATIO, PLANET_COLOR);
+
+            // 安定軌道の衛星も惑星の位置に合わせて調整
+            stableSatellites.forEach(s => {
+                s.planetX = planet.x;
+                s.y = planet.y;
+                // 安定軌道の衛星は、中心からの距離と角度を維持したまま再配置
+                s.x = s.planetX + Math.cos(s.currentAngle) * s.stableOrbitRadius;
+                s.y = s.planetY + Math.sin(s.currentAngle) * s.stableOrbitRadius;
+            });
+        }
+
+        function resetGame() {
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+
+            score = 0;
+            gameOver = false;
+            satellites = [];
+            stableSatellites = [];
+            lostSatellitesCount = 0;
+            lastSatelliteSpawnTime = performance.now();
+
+            gameOverScreen.classList.remove('active'); // ゲームオーバー画面を非表示
+            scoreDisplay.textContent = 'スコア: 0';
+
+            resizeCanvas(); // キャンバスと惑星を再設定
+
+            startGame();
+        }
+
+        function startGame() {
+            lastTimestamp = performance.now();
+            gameLoop(lastTimestamp);
+        }
+
+        function gameLoop(timestamp) {
+            if (gameOver) {
+                return;
+            }
+
+            const deltaTime = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function update(deltaTime) {
+            // 新しい衛星を生成
+            // 不規則軌道の衛星の数が最大値未満の場合のみ生成
+            if (performance.now() - lastSatelliteSpawnTime > SATELLITE_SPAWN_INTERVAL && satellites.length < MAX_ACTIVE_SATELLITES) {
+                satellites.push(new Satellite(planet.x, planet.y));
+                lastSatelliteSpawnTime = performance.now();
+            }
+
+            // 不規則軌道の衛星を更新
+            // 寿命切れの衛星はここで配列から削除
+            satellites = satellites.filter(s => {
+                const removed = s.update(deltaTime);
+                if (removed) {
+                    // ゲームオーバー条件チェック
+                    if (lostSatellitesCount >= MAX_SATELLITES_LOSE) {
+                        gameOver = true;
+                        showGameOverScreen();
+                    }
+                    return false; // この衛星は配列から削除
+                }
+                return true; // この衛星は配列に残す
+            });
+
+            // 安定軌道の衛星を更新
+            stableSatellites.forEach(s => s.update(deltaTime));
+
+            // スコア表示の更新
+            scoreDisplay.textContent = `スコア: ${score}`;
+        }
+
+        function draw() {
+            // キャンバスをクリアし、宇宙の背景色で塗りつぶす
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.fillStyle = '#050510';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // ターゲットリングの描画
+            ctx.beginPath();
+            ctx.arc(planet.x, planet.y, Math.min(canvas.width, canvas.height) * TARGET_RING_RADIUS_RATIO, 0, Math.PI * 2);
+            ctx.strokeStyle = TARGET_RING_COLOR;
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 5]); // 破線
+            ctx.globalAlpha = 0.5; // 少し透過させる
+            ctx.stroke();
+            ctx.setLineDash([]); // 破線をリセット
+            ctx.globalAlpha = 1;
+
+            // 惑星の描画
+            planet.draw(ctx);
+
+            // 安定軌道の衛星の描画（不規則軌道のものより後ろに描画されるように）
+            stableSatellites.forEach(s => s.draw(ctx));
+
+            // 不規則軌道の衛星の描画
+            satellites.forEach(s => s.draw(ctx));
+        }
+
+        function handleTap(event) {
+            if (gameOver) return;
+
+            // デフォルトのタッチ動作（スクロール、ズームなど）を防止
+            event.preventDefault();
+
+            const touchX = event.touches[0].clientX;
+            const touchY = event.touches[0].clientY;
+
+            // タッチ座標をキャンバス座標に変換
+            const rect = canvas.getBoundingClientRect();
+            const canvasX = touchX - rect.left;
+            const canvasY = touchY - rect.top;
+
+            // 衛星のどれかがタップされたかチェック（配列の最後から順にチェックし、タップされたらループを抜ける）
+            for (let i = satellites.length - 1; i >= 0; i--) {
+                const satellite = satellites[i];
+
+                if (satellite.tapped) continue; // 既にタップされた（または寿命切れで消えかけの）衛星はスキップ
+
+                const distFromPlanet = getDistance(planet.x, planet.y, satellite.x, satellite.y);
+                const targetRingRadius = Math.min(canvas.width, canvas.height) * TARGET_RING_RADIUS_RATIO;
+
+                // タップ位置が衛星に近いか、かつ衛星がターゲットリング内にいるか
+                const isNearSatellite = getDistance(canvasX, canvasY, satellite.x, satellite.y) < satellite.radius * 2; // タップの許容範囲を少し広げる
+                const isInTargetRing = Math.abs(distFromPlanet - targetRingRadius) < RING_TOLERANCE;
+
+                if (isNearSatellite && isInTargetRing) {
+                    satellite.stable = true;
+                    satellite.tapped = true; // タップ済みマーク
+                    satellite.color = STABLE_SATELLITE_COLOR; // 色を安定色に変更
+
+                    // 現在の軌道パラメータを安定軌道パラメータとして設定
+                    satellite.stableOrbitRadius = distFromPlanet;
+                    satellite.stableAngle = satellite.currentAngle;
+                    satellite.stableAngularSpeed = ANGULAR_SPEED_BASE; // 安定軌道は一定の速度で周回
+
+                    score++;
+                    
+                    // 衛星を不規則軌道配列から安定軌道配列へ移動
+                    stableSatellites.push(satellite);
+                    satellites.splice(i, 1);
+                    break; // 1回のタップで安定させられる衛星は1つだけ
+                }
+            }
+        }
+
+        function showGameOverScreen() {
+            finalScoreDisplay.textContent = score;
+            gameOverScreen.classList.add('active'); // ゲームオーバー画面を表示
+            cancelAnimationFrame(animationFrameId); // ゲームループを停止
+        }
+
+        // DOMが完全に読み込まれたらゲームを初期化して開始
+        document.addEventListener('DOMContentLoaded', initGame);
+    </script>
+</body>
+</html>

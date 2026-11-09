@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>パルスチャレンジ</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden; /* スクロール防止 */
+            font-family: 'Arial', sans-serif;
+            background-color: #222;
+            color: #eee;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            user-select: none; /* タップ時に文字選択されないように */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効に */
+            touch-action: manipulation; /* ダブルタップズームなどを無効化 */
+        }
+
+        #game-container {
+            width: 100vw;
+            height: 100vh;
+            max-width: 600px; /* PCなど横長画面での上限 */
+            max-height: 900px; /* PCなど横長画面での上限 */
+            aspect-ratio: 9/16; /* 縦長比率を維持 */
+            background-color: #333;
+            display: flex;
+            flex-direction: column;
+            justify-content: center; /* オブジェクトを中央に配置 */
+            align-items: center;
+            position: relative;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+            /* タップ領域として機能させる */
+            cursor: pointer;
+        }
+        
+        #score-display {
+            font-size: 2em;
+            position: absolute;
+            top: 5vh; /* 画面上部に配置 */
+            z-index: 5; /* 他の要素より手前に */
+        }
+
+        #pulsing-object {
+            width: 150px;
+            height: 150px;
+            background-color: #f39c12; /* オレンジ */
+            border-radius: 50%;
+            /* translate(-50%, -50%) で中央寄せしているため absolute top/left は50%で良い */
+            position: absolute; 
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%) scale(1); /* 初期スケール */
+            transition: background-color 0.1s ease-out; /* ヒット時の色変化 */
+        }
+
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+            display: none; /* 初期は非表示 */
+        }
+
+        #game-over-screen p {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            color: #eee;
+            text-align: center;
+        }
+
+        #retry-button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            background-color: #2ecc71; /* 緑 */
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 5px #27ae60;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            outline: none; /* フォーカス時のアウトラインを削除 */
+        }
+
+        #retry-button:active {
+            background-color: #27ae60;
+            box-shadow: 0 2px #27ae60;
+            transform: translateY(3px);
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="score-display">スコア: 0</div>
+        <div id="pulsing-object"></div>
+        <div id="game-over-screen">
+            <p id="final-score">最終スコア: 0</p>
+            <button id="retry-button">もう一度</button>
+        </div>
+    </div>
+
+    <script>
+        const pulsingObject = document.getElementById('pulsing-object');
+        const scoreDisplay = document.getElementById('score-display');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const retryButton = document.getElementById('retry-button');
+        const gameContainer = document.getElementById('game-container');
+
+        let score = 0;
+        let gameRunning = false;
+        let animationFrameId;
+
+        // 脈動の基本速度とピークの許容範囲
+        const initialPulseDuration = 1000; // 1周期の長さ (ms)
+        const minPulseDuration = 300; // 最速の周期 (ms)
+        let currentPulseDuration = initialPulseDuration;
+
+        const initialPulsePeakWindow = 120; // ピーク時の許容範囲 (ms) (例: ピークの前後60ms)
+        const minPulsePeakWindow = 20; // 最小の許容範囲 (ms)
+        let currentPulsePeakWindow = initialPulsePeakWindow;
+
+        let lastPulseTime = 0; // 現在の脈動サイクルが開始したパフォーマンスタイム
+
+        function initGame() {
+            score = 0;
+            scoreDisplay.textContent = `スコア: ${score}`;
+            currentPulseDuration = initialPulseDuration;
+            currentPulsePeakWindow = initialPulsePeakWindow;
+            gameOverScreen.style.display = 'none';
+            pulsingObject.style.backgroundColor = '#f39c12'; // オブジェクトの色を初期色に
+            gameRunning = true;
+        }
+
+        function startGame() {
+            initGame();
+            lastPulseTime = performance.now(); // ゲーム開始時のタイムスタンプを最初の脈動開始時間とする
+            gameLoop(performance.now()); // アニメーションループ開始
+        }
+
+        function stopGame() {
+            gameRunning = false;
+            cancelAnimationFrame(animationFrameId); // アニメーション停止
+            finalScoreDisplay.textContent = `最終スコア: ${score}`;
+            gameOverScreen.style.display = 'flex'; // ゲームオーバー画面表示
+        }
+
+        function gameLoop(currentTime) {
+            if (!gameRunning) return;
+
+            // 現在のサイクルでの経過時間
+            // % currentPulseDuration で、周期が現在のdurationを超えたら0に戻る
+            let elapsedInCurrentCycle = (currentTime - lastPulseTime) % currentPulseDuration;
+            
+            // 脈動のアニメーション比率 (0 -> 1 (ピーク) -> 0)
+            // Math.sin の引数はラジアンなので、(経過時間 / 周期) * PI を使う
+            let pulseRatio = Math.sin(Math.PI * elapsedInCurrentCycle / currentPulseDuration);
+            
+            // オブジェクトのスケールを変化させる (例: 1.0倍から1.3倍まで)
+            let scale = 1 + pulseRatio * 0.3;
+            pulsingObject.style.transform = `translate(-50%, -50%) scale(${scale})`;
+
+            animationFrameId = requestAnimationFrame(gameLoop); // 次のフレームを要求
+        }
+
+        function checkTap(currentTime) {
+            if (!gameRunning) return;
+
+            let elapsedInCurrentCycle = (currentTime - lastPulseTime) % currentPulseDuration;
+            
+            // 脈動のピークは半周期の時点
+            const peakTime = currentPulseDuration / 2;
+            // ピークの許容範囲の開始と終了
+            const peakStart = peakTime - currentPulsePeakWindow / 2;
+            const peakEnd = peakTime + currentPulsePeakWindow / 2;
+
+            if (elapsedInCurrentCycle >= peakStart && elapsedInCurrentCycle <= peakEnd) {
+                // タップ成功！
+                score++;
+                scoreDisplay.textContent = `スコア: ${score}`;
+                
+                // 難易度を上げる
+                // 脈動速度を速く (周期を短く)
+                currentPulseDuration = Math.max(minPulseDuration, initialPulseDuration * Math.pow(0.95, score));
+                // 許容範囲を狭く
+                currentPulsePeakWindow = Math.max(minPulsePeakWindow, initialPulsePeakWindow * Math.pow(0.90, score));
+
+                // 成功時の視覚的フィードバック
+                pulsingObject.style.backgroundColor = '#2ecc71'; // 緑色に変化
+                setTimeout(() => {
+                    if (gameRunning) pulsingObject.style.backgroundColor = '#f39c12'; // 元の色に戻す
+                }, 100);
+
+                // 次の脈動サイクルはタップした時点から開始とみなす
+                lastPulseTime = currentTime; 
+
+            } else {
+                // タップ失敗
+                pulsingObject.style.backgroundColor = '#e74c3c'; // 赤色に変化
+                setTimeout(() => {
+                    // ゲームオーバー後でも色が戻るように、isGameRunningのチェックはしない
+                    pulsingObject.style.backgroundColor = '#f39c12'; 
+                }, 100);
+                stopGame(); // ゲームオーバー
+            }
+        }
+
+        // イベントリスナー
+        // gameContainer全体のタップイベントを監視
+        gameContainer.addEventListener('pointerdown', (e) => {
+            // ゲームオーバー画面が表示されている場合、またはリトライボタンやスコア表示がタップされた場合は、ゲームのタップ判定を行わない
+            if (gameOverScreen.style.display === 'flex' || e.target === retryButton || e.target === scoreDisplay || e.target === finalScoreDisplay) {
+                return;
+            }
+            checkTap(performance.now());
+        });
+
+        // リトライボタンのタップイベント
+        retryButton.addEventListener('pointerdown', (e) => {
+            e.stopPropagation(); // gameContainerへのイベント伝播を防ぐ
+            startGame();
+        });
+
+        // ページロード時にゲームを開始
+        startGame();
+    </script>
+</body>
+</html>

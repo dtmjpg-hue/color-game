@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>タイミングサークルチャレンジ</title>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="introScreen">
+            <h1>タイミングサークルチャレンジ</h1>
+            <p>画面中央で拡大縮小する動く円が、ターゲットの白い円に重なった瞬間に画面のどこかをタップしましょう。</p>
+            <p>タイミングが完璧だと高得点が得られます！</p>
+            <button id="startButton">スタート</button>
+        </div>
+
+        <div id="gameScreen" style="display: none;">
+            <div id="scoreDisplay">スコア: <span id="score">0</span></div>
+            <div id="targetCircle"></div>
+            <div id="movingCircle"></div>
+            <div id="resultText"></div>
+            <button id="retryButton">リトライ</button>
+        </div>
+    </div>
+
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* スクロール防止 */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+            background-color: #222;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            user-select: none; /* テキスト選択防止 */
+            -webkit-user-select: none; /* Safari用 */
+            -moz-user-select: none; /* Firefox用 */
+            -ms-user-select: none; /* IE用 */
+            touch-action: manipulation; /* タップの遅延除去やデフォルト動作防止 */
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #introScreen, #gameScreen {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            box-sizing: border-box; /* padding, borderをwidth/heightに含める */
+            padding: 20px;
+        }
+
+        #introScreen h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+
+        #introScreen p {
+            font-size: 1.2em;
+            margin-bottom: 10px;
+            max-width: 80%;
+            line-height: 1.5;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            margin-top: 30px;
+            cursor: pointer;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.3s ease;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #scoreDisplay {
+            position: absolute;
+            top: 5vh;
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #targetCircle {
+            position: absolute;
+            background-color: rgba(255, 255, 255, 0.3); /* 半透明の白 */
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            top: 50%;
+            left: 50%;
+        }
+
+        #movingCircle {
+            position: absolute;
+            background-color: #4CAF50; /* 動く円の初期色 */
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            top: 50%;
+            left: 50%;
+            transition: background-color 0.1s ease; /* タップ時の色変化を滑らかに */
+        }
+
+        #resultText {
+            position: absolute;
+            top: 15vh;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #ffcc00; /* 結果テキストの色 */
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #retryButton {
+            position: absolute;
+            bottom: 5vh;
+            padding: 12px 25px;
+            font-size: 1.2em;
+            background-color: #dc3545; /* リトライボタンの色 */
+        }
+        #retryButton:hover {
+            background-color: #c82333;
+        }
+    </style>
+
+    <script>
+        // DOM要素の取得
+        const gameContainer = document.getElementById('gameContainer');
+        const introScreen = document.getElementById('introScreen');
+        const gameScreen = document.getElementById('gameScreen');
+        const startButton = document.getElementById('startButton');
+        const scoreDisplay = document.getElementById('score');
+        const targetCircle = document.getElementById('targetCircle');
+        const movingCircle = document.getElementById('movingCircle');
+        const resultText = document.getElementById('resultText');
+        const retryButton = document.getElementById('retryButton');
+
+        // ゲーム定数
+        const MIN_SIZE = 50; // 動く円の最小サイズ (px)
+        const MAX_SIZE = 250; // 動く円の最大サイズ (px)
+        const TARGET_SIZE = 150; // ターゲット円のサイズ (px)
+        const ANIMATION_SPEED_PX_PER_MS = 0.2; // 1ミリ秒あたりのサイズ変化量 (px/ms)
+        const MAX_SCORE_PER_HIT = 1000; // 完璧なタイミングでの最大スコア
+        const SCORE_MULTIPLIER = MAX_SCORE_PER_HIT / (MAX_SIZE - TARGET_SIZE); // スコア計算用乗数
+        const ORIGINAL_CIRCLE_COLOR = '#4CAF50';
+        const PERFECT_COLOR = '#00FF00'; // PERFECTヒット時の色
+        const GOOD_COLOR = '#FFFF00'; // GOODヒット時の色
+        const BAD_COLOR = '#FF0000'; // BADヒット時の色
+
+        // ゲーム状態変数
+        let isGameStarted = false;
+        let score = 0;
+        let animationFrameId = null;
+        let currentCircleSize = MIN_SIZE;
+        let animationDirection = 1; // 1:拡大, -1:縮小
+        let lastTimestamp = 0;
+        let resultTextTimeout = null;
+        let circleColorResetTimeout = null;
+
+        // 初期設定
+        function initializeGame() {
+            targetCircle.style.width = TARGET_SIZE + 'px';
+            targetCircle.style.height = TARGET_SIZE + 'px';
+            resetAnimation();
+
+            startButton.addEventListener('click', startGame);
+            gameScreen.addEventListener('touchstart', handleTap, { passive: false }); // preventDefaultを使うためpassive: false
+            retryButton.addEventListener('click', resetGame);
+        }
+
+        // ゲーム開始
+        function startGame() {
+            introScreen.style.display = 'none';
+            gameScreen.style.display = 'flex';
+            score = 0;
+            scoreDisplay.textContent = score;
+            resultText.textContent = '';
+            isGameStarted = true;
+            resetAnimation(); // アニメーションを初期状態にリセット
+            lastTimestamp = 0; // タイムスタンプをリセットして最初からアニメーションを開始
+            animationFrameId = requestAnimationFrame(animateCircle);
+        }
+
+        // ゲームのリセット（リトライボタン）
+        function resetGame() {
+            cancelAnimationFrame(animationFrameId); // 現在のアニメーションを停止
+            score = 0;
+            scoreDisplay.textContent = score;
+            resultText.textContent = '';
+            clearTimeout(resultTextTimeout);
+            clearTimeout(circleColorResetTimeout);
+            movingCircle.style.backgroundColor = ORIGINAL_CIRCLE_COLOR;
+            isGameStarted = true; // リトライでゲームは継続中
+            resetAnimation(); // アニメーションを初期状態にリセット
+            lastTimestamp = 0; // タイムスタンプをリセットして最初からアニメーションを開始
+            animationFrameId = requestAnimationFrame(animateCircle);
+        }
+
+        // アニメーションのリセット
+        function resetAnimation() {
+            currentCircleSize = MIN_SIZE;
+            animationDirection = 1;
+            movingCircle.style.width = currentCircleSize + 'px';
+            movingCircle.style.height = currentCircleSize + 'px';
+        }
+
+        // 円のアニメーション
+        function animateCircle(timestamp) {
+            if (!lastTimestamp) {
+                lastTimestamp = timestamp;
+            }
+            const deltaTime = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            const deltaSize = ANIMATION_SPEED_PX_PER_MS * deltaTime * animationDirection;
+            currentCircleSize += deltaSize;
+
+            if (animationDirection === 1 && currentCircleSize >= MAX_SIZE) {
+                currentCircleSize = MAX_SIZE;
+                animationDirection = -1;
+            } else if (animationDirection === -1 && currentCircleSize <= MIN_SIZE) {
+                currentCircleSize = MIN_SIZE;
+                animationDirection = 1;
+            }
+
+            movingCircle.style.width = currentCircleSize + 'px';
+            movingCircle.style.height = currentCircleSize + 'px';
+
+            animationFrameId = requestAnimationFrame(animateCircle);
+        }
+
+        // タップ処理
+        function handleTap(event) {
+            event.preventDefault(); // デフォルトのスクロール動作などを防止
+
+            if (!isGameStarted) {
+                return;
+            }
+
+            const diff = Math.abs(currentCircleSize - TARGET_SIZE);
+            const points = Math.max(0, Math.round(MAX_SCORE_PER_HIT - diff * SCORE_MULTIPLIER));
+            score += points;
+            scoreDisplay.textContent = score;
+
+            // 結果テキスト表示
+            let message = '';
+            let color = ORIGINAL_CIRCLE_COLOR;
+            if (points === MAX_SCORE_PER_HIT) {
+                message = 'PERFECT! +' + points + '点！';
+                color = PERFECT_COLOR;
+            } else if (points > MAX_SCORE_PER_HIT * 0.7) {
+                message = 'Good! +' + points + '点！';
+                color = GOOD_COLOR;
+            } else if (points > 0) {
+                message = 'Nice! +' + points + '点！';
+                color = ORIGINAL_COLOR; // デフォルト色
+            } else {
+                message = 'Bad... 0点。';
+                color = BAD_COLOR;
+            }
+            
+            resultText.textContent = message;
+            clearTimeout(resultTextTimeout);
+            resultTextTimeout = setTimeout(() => {
+                resultText.textContent = '';
+            }, 1500); // 1.5秒後に結果テキストを消す
+
+            // 動く円の色を一時的に変更
+            movingCircle.style.backgroundColor = color;
+            clearTimeout(circleColorResetTimeout);
+            circleColorResetTimeout = setTimeout(() => {
+                movingCircle.style.backgroundColor = ORIGINAL_CIRCLE_COLOR;
+            }, 300); // 0.3秒後に元の色に戻す
+        }
+
+        // ページ読み込み完了後に初期化
+        document.addEventListener('DOMContentLoaded', initializeGame);
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

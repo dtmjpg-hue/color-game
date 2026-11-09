@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>リング縮小チャレンジ</title>
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* スクロールを禁止 */
+            width: 100%;
+            height: 100%;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            background-color: #f0f0f0;
+            -webkit-user-select: none; /* テキスト選択を禁止 (iOS) */
+            -moz-user-select: none;    /* テキスト選択を禁止 (Firefox) */
+            -ms-user-select: none;     /* テキスト選択を禁止 (IE/Edge) */
+            user-select: none;         /* テキスト選択を禁止 */
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #gameCanvas {
+            display: block;
+            background-color: #ADD8E6; /* 明るい青空の色 */
+            touch-action: none; /* ブラウザのタッチジェスチャー（プルツーリフレッシュなど）を防止 */
+        }
+
+        #score-display {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            right: 0;
+            text-align: center;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            text-shadow: 1px 1px 2px rgba(255, 255, 255, 0.7);
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7); /* 半透明の黒 */
+            display: flex; /* JavaScriptで表示/非表示を切り替える */
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 10; /* Canvasより前面に表示 */
+        }
+
+        #overlay h2 {
+            margin-top: 0;
+            font-size: 2em;
+            color: #FFD700; /* ゴールド */
+        }
+
+        #overlay p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        #overlay button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: white;
+            background-color: #007bff; /* 青 */
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            -webkit-tap-highlight-color: transparent; /* モバイルでのタップ時のハイライトを削除 */
+        }
+
+        #overlay button:hover {
+            background-color: #0056b3;
+        }
+
+        #game-over-screen, #start-screen {
+            display: flex; /* デフォルトはJavaScriptで制御 */
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            max-width: 300px;
+            background-color: rgba(255, 255, 255, 0.9);
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            color: #333;
+        }
+        #game-over-screen p, #start-screen p {
+            color: #555;
+        }
+        #game-over-screen button, #start-screen button {
+            background-color: #28a745; /* 緑色 (開始/リトライ) */
+        }
+        #game-over-screen button:hover, #start-screen button:hover {
+            background-color: #218838;
+        }
+
+        #final-score {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="score-display">スコア: 0</div>
+        <div id="overlay">
+            <div id="start-screen">
+                <h2>リング縮小チャレンジ</h2>
+                <p id="instructions">
+                    画面中央の点を操作します。<br>
+                    拡大するリングが点に重なる瞬間にタップして点を縮小させ、<br>
+                    リングを通り抜けましょう。リングに触れるとゲームオーバー！
+                </p>
+                <button id="startButton">スタート</button>
+            </div>
+            <div id="game-over-screen" style="display: none;">
+                <h2>ゲームオーバー！</h2>
+                <p id="final-score">最終スコア: 0</p>
+                <button id="retryButton">リトライ</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('score-display');
+        const overlay = document.getElementById('overlay');
+        const startScreen = document.getElementById('start-screen');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const startButton = document.getElementById('startButton');
+        const retryButton = document.getElementById('retryButton');
+
+        let score = 0;
+        let gameRunning = false;
+        let animationFrameId;
+        let lastFrameTime = 0;
+
+        // プレイヤー（点）のプロパティ
+        const playerNormalRadius = 20; // 通常時の半径
+        const playerShrinkRadius = 5;  // 縮小時の半径
+        const shrinkDuration = 300;    // 縮小状態の持続時間 (ms)
+        let playerRadius = playerNormalRadius;
+        let isShrinking = false;
+        let shrinkStartTime = 0;
+
+        // リングのプロパティ
+        const ringThickness = 20;      // リングの太さ
+        let ringExpandSpeed = 100;     // リングの拡大速度 (pixels/second)
+        let ringCurrentRadius = ringThickness / 2; // リングの中心半径
+        let currentRingDecisionMade = false; // 現在のリングに対して判定が完了したか
+
+        // Canvasの寸法と中心座標
+        let canvasWidth, canvasHeight;
+        let centerX, centerY;
+
+        // Canvasのサイズをセットアップ
+        function setupCanvas() {
+            canvasWidth = window.innerWidth;
+            canvasHeight = window.innerHeight;
+            canvas.width = canvasWidth;
+            canvas.height = canvasHeight;
+            centerX = canvasWidth / 2;
+            centerY = canvasHeight / 2;
+        }
+
+        // ゲームの状態をリセット
+        function resetGame() {
+            score = 0;
+            scoreDisplay.textContent = `スコア: ${score}`;
+            playerRadius = playerNormalRadius;
+            isShrinking = false;
+            shrinkStartTime = 0;
+            ringExpandSpeed = 100; // 速度を初期値に戻す
+            ringCurrentRadius = ringThickness / 2; // リングを初期位置に戻す
+            currentRingDecisionMade = false;
+        }
+
+        // ゲームを開始
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            overlay.style.display = 'none'; // オーバーレイを非表示
+
+            resetGame();
+            gameRunning = true;
+            lastFrameTime = performance.now();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // ゲームオーバー処理
+        function gameOver() {
+            gameRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            finalScoreDisplay.textContent = `最終スコア: ${score}`;
+            gameOverScreen.style.display = 'flex';
+            overlay.style.display = 'flex'; // オーバーレイを表示
+        }
+
+        // 描画処理
+        function draw() {
+            ctx.clearRect(0, 0, canvasWidth, canvasHeight);
+
+            // プレイヤーの点を描画
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, playerRadius, 0, Math.PI * 2);
+            ctx.fillStyle = isShrinking ? '#FFD700' : '#4CAF50'; // 縮小中は黄色、通常時は緑色
+            ctx.fill();
+
+            // 拡大するリングを描画
+            ctx.beginPath();
+            ctx.arc(centerX, centerY, ringCurrentRadius, 0, Math.PI * 2);
+            ctx.lineWidth = ringThickness;
+            ctx.strokeStyle = '#FF6347'; // 赤橙色
+            ctx.stroke();
+        }
+
+        // 更新処理
+        function update(deltaTime) {
+            if (!gameRunning) return;
+
+            // プレイヤーの縮小状態を更新
+            if (isShrinking) {
+                const elapsed = performance.now() - shrinkStartTime;
+                if (elapsed >= shrinkDuration) {
+                    isShrinking = false;
+                    playerRadius = playerNormalRadius;
+                }
+            }
+
+            // リングのサイズを更新
+            ringCurrentRadius += ringExpandSpeed * (deltaTime / 1000);
+
+            // ゲームオーバー/スコア判定
+            // リングの中心がプレイヤーの通常の半径＋リングの厚さの半分を通過する点が判定の閾値
+            const passThreshold = playerNormalRadius + ringThickness / 2;
+
+            if (ringCurrentRadius >= passThreshold && !currentRingDecisionMade) {
+                // リングがプレイヤーの通常サイズ領域を通過した
+                if (isShrinking) {
+                    // プレイヤーは適切なタイミングで縮小していた
+                    score++;
+                    scoreDisplay.textContent = `スコア: ${score}`;
+                    currentRingDecisionMade = true;
+                    ringExpandSpeed += 5; // スコアが上がるごとにリングの速度を速める
+                } else {
+                    // プレイヤーは縮小していなかった。ゲームオーバー。
+                    gameOver();
+                    currentRingDecisionMade = true;
+                    return;
+                }
+            }
+
+            // リングが画面外に出たら新しいリングを生成
+            if (ringCurrentRadius > Math.max(canvasWidth, canvasHeight) / 2 + ringThickness) {
+                ringCurrentRadius = ringThickness / 2; // 新しいリングとしてリセット
+                currentRingDecisionMade = false;       // 判定フラグもリセット
+            }
+        }
+
+        // ゲームループ
+        function gameLoop(currentTime) {
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+
+            update(deltaTime);
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // タップ/クリックイベントハンドラ
+        function handleTap(event) {
+            event.preventDefault(); // デフォルトのタッチ/クリック動作を防止 (例: スクロール)
+
+            if (!gameRunning) {
+                // ゲームが実行中でない場合、ボタンクリックで開始する
+                return;
+            }
+
+            // ゲーム実行中: プレイヤーがタップして点を縮小させる
+            if (!isShrinking) {
+                isShrinking = true;
+                playerRadius = playerShrinkRadius;
+                shrinkStartTime = performance.now();
+            }
+        }
+
+        // イベントリスナーの登録
+        window.addEventListener('resize', setupCanvas);
+        canvas.addEventListener('touchstart', handleTap); // スマホでのタップ
+        canvas.addEventListener('mousedown', handleTap);   // PCでのクリック
+
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+
+        // 初期セットアップ
+        setupCanvas();
+        startScreen.style.display = 'flex'; // スタート画面を表示
+        overlay.style.display = 'flex';     // オーバーレイを表示してスタート画面を見せる
+        gameOverScreen.style.display = 'none'; // ゲームオーバー画面は非表示に
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>パーフェクトクロス</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #333;
+            /* スマホでのデフォルト動作を抑制 */
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            touch-action: manipulation; /* ピンチズームやダブルタップズームを抑制 */
+        }
+
+        #gameContainer {
+            width: 100%;
+            height: 100%;
+            max-width: 600px; /* PCブラウザで開いた時に縦長画面を維持するための制限 */
+            max-height: 100vh;
+            position: relative;
+            background-color: #fff;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #startScreen, #gameScreen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        h1 {
+            color: #007bff;
+            margin-bottom: 20px;
+            font-size: 2em;
+        }
+
+        p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            outline: none;
+            box-shadow: 0 4px 6px rgba(0, 123, 255, 0.3);
+            transition: background-color 0.3s ease, transform 0.1s ease;
+        }
+
+        button:active {
+            transform: scale(0.98);
+            background-color: #0056b3;
+        }
+
+        #gameCanvas {
+            background-color: #e0e0e0;
+            display: block;
+            touch-action: none; /* スマホでタップ時のデフォルト動作を抑制 */
+            width: 100%; /* 親要素の幅いっぱいに広げる */
+            flex-grow: 1; /* 残りのスペースを埋める */
+        }
+
+        #scoreDisplay, #lastScoreDisplay {
+            width: 100%;
+            padding: 10px 0;
+            background-color: rgba(255, 255, 255, 0.9);
+            text-align: center;
+            font-weight: bold;
+            font-size: 1.1em;
+            color: #555;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 10;
+        }
+
+        #scoreDisplay {
+            order: -1; /* 上部に配置 */
+        }
+
+        #lastScoreDisplay {
+            order: 1; /* 下部に配置 */
+            font-size: 0.9em;
+            color: #777;
+        }
+
+        #retryButton {
+            position: absolute;
+            bottom: 60px; /* lastScoreDisplayの上に配置 */
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            font-size: 1em;
+            background-color: #6c757d;
+            box-shadow: 0 4px 6px rgba(108, 117, 125, 0.3);
+            z-index: 10;
+        }
+
+        #retryButton:active {
+            background-color: #545b62;
+        }
+
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 480px) {
+            h1 {
+                font-size: 1.8em;
+            }
+            p {
+                font-size: 1em;
+            }
+            button {
+                padding: 12px 25px;
+                font-size: 1.1em;
+            }
+            #scoreDisplay, #lastScoreDisplay {
+                font-size: 1em;
+            }
+            #retryButton {
+                font-size: 0.9em;
+                padding: 8px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <div id="startScreen">
+            <h1>パーフェクトクロス</h1>
+            <p>画面を異なる方向に移動する2本の線が、</p>
+            <p>中央のターゲット点で完璧に交差する瞬間にタップ！</p>
+            <p>交差の精度が高いほど高得点です。</p>
+            <button id="startButton">スタート</button>
+        </div>
+        <div id="gameScreen" style="display:none;">
+            <div id="scoreDisplay">累計スコア: <span id="currentScore">0</span></div>
+            <canvas id="gameCanvas"></canvas>
+            <div id="lastScoreDisplay">前回の得点: <span id="lastScore">0</span></div>
+            <button id="retryButton">リトライ</button>
+        </div>
+    </div>
+
+    <script>
+        const game = {
+            canvas: null,
+            ctx: null,
+            width: 0,
+            height: 0,
+            targetX: 0,
+            targetY: 0,
+            line1: {}, // 垂直線
+            line2: {}, // 水平線
+            totalScore: 0,
+            lastTapScore: 0,
+            gameState: 'start', // 'start', 'playing'
+            animationFrameId: null,
+
+            // DOM要素
+            startButton: null,
+            retryButton: null,
+            startScreen: null,
+            gameScreen: null,
+            
+            // スコア表示関連のDOM要素を明確化
+            scoreDiv: null,           // div#scoreDisplay
+            currentScoreSpan: null,   // span#currentScore
+            lastScoreDiv: null,       // div#lastScoreDisplay
+            lastScoreSpan: null,      // span#lastScore
+        };
+
+        function setupDOM() {
+            game.canvas = document.getElementById('gameCanvas');
+            game.ctx = game.canvas.getContext('2d');
+            game.startButton = document.getElementById('startButton');
+            game.retryButton = document.getElementById('retryButton');
+            game.startScreen = document.getElementById('startScreen');
+            game.gameScreen = document.getElementById('gameScreen');
+            
+            // 新しい命名に合わせてDOM要素を取得
+            game.scoreDiv = document.getElementById('scoreDisplay');
+            game.currentScoreSpan = document.getElementById('currentScore');
+            game.lastScoreDiv = document.getElementById('lastScoreDisplay');
+            game.lastScoreSpan = document.getElementById('lastScore');
+
+            game.startButton.addEventListener('click', startGame);
+            game.retryButton.addEventListener('click', initGame);
+            game.canvas.addEventListener('touchstart', handleTap, { passive: false });
+            window.addEventListener('resize', resizeCanvas);
+        }
+
+        function resizeCanvas() {
+            const gameContainer = document.getElementById('gameContainer');
+            
+            // gameContainerの現在のサイズを取得
+            game.width = gameContainer.clientWidth;
+            game.height = gameContainer.clientHeight;
+
+            // スコア表示要素の高さを取得
+            // 修正: game.scoreDisplay -> game.scoreDiv
+            // 修正: game.lastScoreDisplay -> game.lastScoreDiv
+            const scoreDisplayHeight = game.scoreDiv.offsetHeight;
+            const lastScoreDisplayHeight = game.lastScoreDiv.offsetHeight;
+            const retryButtonHeight = game.retryButton.offsetHeight;
+            const retryButtonMargin = 60; // CSSで設定したbottom値
+
+            // Canvasの論理サイズを計算 (スコア表示とリトライボタン領域を除く)
+            game.canvas.width = game.width;
+            game.canvas.height = game.height - scoreDisplayHeight - lastScoreDisplayHeight - retryButtonHeight - retryButtonMargin / 2;
+            
+            // ターゲット位置を再計算
+            game.targetX = game.canvas.width / 2;
+            game.targetY = game.canvas.height / 2;
+        }
+
+        function startGame() {
+            game.startScreen.style.display = 'none';
+            game.gameScreen.style.display = 'flex'; // flexにして子要素を中央揃え
+            game.gameState = 'playing';
+            resizeCanvas(); // ゲーム開始時にcanvasサイズを調整
+            initGame();
+        }
+
+        function initGame() {
+            game.totalScore = 0;
+            game.lastTapScore = 0;
+            // 修正: game.currentScoreDisplay -> game.currentScoreSpan
+            // 修正: game.lastScoreDisplay -> game.lastScoreSpan
+            game.currentScoreSpan.textContent = game.totalScore;
+            game.lastScoreSpan.textContent = game.lastTapScore;
+            resetLines();
+            if (game.animationFrameId) {
+                cancelAnimationFrame(game.animationFrameId);
+            }
+            // 修正: game.gameLoop() -> gameLoop()
+            gameLoop();
+        }
+
+        function resetLines() {
+            const now = Date.now();
+
+            // 垂直線 (左右に揺れながら上から下へ)
+            game.line1 = {
+                startTime: now,
+                travelDuration: 2500 + Math.random() * 1000, // 2.5秒〜3.5秒で画面を縦断
+                amplitudeX: game.canvas.width * (0.15 + Math.random() * 0.3), // 振幅15%〜45%
+                oscillationSpeed: (0.003 + Math.random() * 0.005) * (Math.random() < 0.5 ? 1 : -1), // 揺れの速度と方向
+                oscillationPhase: Math.random() * Math.PI * 2,
+                x: 0, // 現在のX座標
+                y: 0  // 現在のY座標
+            };
+
+            // 水平線 (上下に揺れながら左から右へ)
+            game.line2 = {
+                startTime: now,
+                travelDuration: 2500 + Math.random() * 1000, // 2.5秒〜3.5秒で画面を横断
+                amplitudeY: game.canvas.height * (0.15 + Math.random() * 0.3), // 振幅15%〜45%
+                oscillationSpeed: (0.003 + Math.random() * 0.005) * (Math.random() < 0.5 ? 1 : -1),
+                oscillationPhase: Math.random() * Math.PI * 2,
+                x: 0, // 現在のX座標
+                y: 0  // 現在のY座標
+            };
+        }
+
+        function update() {
+            if (game.gameState !== 'playing') return;
+
+            const now = Date.now();
+
+            // 垂直線 (line1) の更新
+            const elapsed1 = now - game.line1.startTime;
+            game.line1.x = game.targetX + Math.sin(game.line1.oscillationPhase + elapsed1 * game.line1.oscillationSpeed) * game.line1.amplitudeX;
+            game.line1.y = (elapsed1 / game.line1.travelDuration) * (game.canvas.height * 1.2) - (game.canvas.height * 0.1); // 画面外から画面外へ移動
+
+            // 水平線 (line2) の更新
+            const elapsed2 = now - game.line2.startTime;
+            game.line2.y = game.targetY + Math.sin(game.line2.oscillationPhase + elapsed2 * game.line2.oscillationSpeed) * game.line2.amplitudeY;
+            game.line2.x = (elapsed2 / game.line2.travelDuration) * (game.canvas.width * 1.2) - (game.canvas.width * 0.1); // 画面外から画面外へ移動
+
+            // 線が画面外に出たらリセット (両方の線が完了したら)
+            if (elapsed1 > game.line1.travelDuration && elapsed2 > game.line2.travelDuration) {
+                resetLines();
+            }
+        }
+
+        function draw() {
+            game.ctx.clearRect(0, 0, game.canvas.width, game.canvas.height);
+
+            // ターゲット点
+            game.ctx.beginPath();
+            game.ctx.arc(game.targetX, game.targetY, 8, 0, Math.PI * 2); // 赤い点でターゲットを明示
+            game.ctx.fillStyle = '#ff0000';
+            game.ctx.fill();
+            game.ctx.strokeStyle = '#cc0000';
+            game.ctx.lineWidth = 2;
+            game.ctx.stroke();
+
+            // 垂直線 (line1)
+            game.ctx.beginPath();
+            game.ctx.moveTo(game.line1.x, 0);
+            game.ctx.lineTo(game.line1.x, game.canvas.height);
+            game.ctx.strokeStyle = '#007bff';
+            game.ctx.lineWidth = 3;
+            game.ctx.stroke();
+
+            // 水平線 (line2)
+            game.ctx.beginPath();
+            game.ctx.moveTo(0, game.line2.y);
+            game.ctx.lineTo(game.canvas.width, game.line2.y);
+            game.ctx.strokeStyle = '#28a745';
+            game.ctx.lineWidth = 3;
+            game.ctx.stroke();
+        }
+
+        function gameLoop() {
+            update();
+            draw();
+            game.animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function handleTap(event) {
+            event.preventDefault(); // デフォルトのタッチ動作 (スクロールなど) を抑制
+            if (game.gameState !== 'playing') return;
+
+            // タップした瞬間の線の交点 (line1.x, line2.y) とターゲット (targetX, targetY) の距離を計算
+            const dx = game.line1.x - game.targetX;
+            const dy = game.line2.y - game.targetY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // 最大距離を画面の対角線長を参考に計算
+            const maxDimension = Math.max(game.canvas.width, game.canvas.height);
+            const maxPossibleDistance = Math.sqrt(
+                Math.pow(maxDimension / 2 + game.line1.amplitudeX, 2) + 
+                Math.pow(maxDimension / 2 + game.line2.amplitudeY, 2)
+            );
+            
+            // スコア計算: 距離が0に近いほど高得点 (最大1000点)
+            // 距離が一定以上離れると0点
+            const baseScore = 1000;
+            let calculatedScore = Math.max(0, Math.floor(baseScore - (distance / (maxPossibleDistance * 0.7)) * baseScore)); // 調整係数0.7
+
+            // 精度に応じてボーナス (距離が非常に近い場合)
+            if (distance < 15) { // ターゲットから15px以内
+                calculatedScore += 100;
+            }
+            if (distance < 10) { // ターゲットから10px以内
+                calculatedScore += 200;
+            }
+            if (distance < 5) { // ターゲットから5px以内
+                calculatedScore += 400;
+            }
+            calculatedScore = Math.min(calculatedScore, baseScore * 2); // スコア上限設定 (ボーナス込み)
+
+            game.lastTapScore = calculatedScore;
+            game.totalScore += game.lastTapScore;
+
+            // 修正: game.currentScoreDisplay -> game.currentScoreSpan
+            // 修正: game.lastScoreDisplay -> game.lastScoreSpan
+            game.currentScoreSpan.textContent = game.totalScore;
+            game.lastScoreSpan.textContent = game.lastTapScore;
+
+            resetLines(); // タップ後、次の線が出現
+        }
+
+        // ページロード時にDOM要素を設定
+        window.addEventListener('load', setupDOM);
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

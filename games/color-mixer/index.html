@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>カラーミキシングゲーム</title>
+    <style>
+        /* Base styles */
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: flex-start; /* Align to top for scrolling on short screens */
+            min-height: 100vh;
+            background-color: #e0e0e0;
+            color: #333;
+            overflow-y: auto; /* Enable scrolling if content exceeds screen height */
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 400px; /* Standard smartphone width */
+            min-height: 100vh; /* Ensure it takes full height on small screens */
+            display: flex;
+            flex-direction: column;
+            background-color: #ffffff;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        /* Start and End screens */
+        #game-start-screen, #game-end-screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            flex-grow: 1; /* Take up available space */
+            padding: 20px;
+        }
+
+        #game-start-screen h1, #game-end-screen h1 {
+            color: #4CAF50;
+            margin-bottom: 20px;
+        }
+
+        #game-start-screen p {
+            margin-bottom: 30px;
+            line-height: 1.6;
+        }
+
+        button {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            font-size: 1.2em;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            margin-top: 15px;
+            width: 80%;
+            max-width: 250px;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        /* Game screen */
+        #game-screen {
+            display: flex;
+            flex-direction: column;
+            flex-grow: 1;
+        }
+
+        #header {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            font-size: 1.1em;
+            font-weight: bold;
+            margin-bottom: 20px;
+        }
+
+        #color-display {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 30px;
+            flex-grow: 1; /* Allow color boxes to take up vertical space */
+            align-items: center;
+        }
+
+        .color-box {
+            width: 45%;
+            padding-bottom: 45%; /* Makes it square */
+            position: relative;
+            border: 3px solid #ccc;
+            border-radius: 10px;
+            box-sizing: border-box;
+            background-color: #eee; /* Default background */
+        }
+
+        .color-box::before {
+            content: attr(data-label);
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: rgba(0, 0, 0, 0.5);
+            font-size: 1.1em;
+            font-weight: bold;
+        }
+        
+        #target-color::before { content: 'ターゲット'; }
+        #mixed-color::before { content: '作成中'; }
+
+        #paint-buttons {
+            display: flex;
+            justify-content: space-around;
+            margin-bottom: 20px;
+        }
+
+        .paint-button {
+            width: 30%;
+            padding: 25px 0; /* Make buttons larger for tapping */
+            font-size: 1.1em;
+            border-radius: 10px;
+            color: white;
+            font-weight: bold;
+        }
+        #red-paint { background-color: #f44336; } /* Red */
+        #yellow-paint { background-color: #ffeb3b; color: #333; } /* Yellow */
+        #blue-paint { background-color: #2196f3; } /* Blue */
+
+        #controls {
+            display: flex;
+            justify-content: space-around;
+            margin-top: auto; /* Push controls to the bottom */
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+
+        #reset-button {
+            background-color: #9e9e9e; /* Gray */
+            width: 45%;
+            padding: 15px 0;
+        }
+
+        #submit-button {
+            background-color: #03a9f4; /* Light Blue */
+            width: 45%;
+            padding: 15px 0;
+        }
+
+        #reset-button:hover { background-color: #888; }
+        #submit-button:hover { background-color: #039be5; }
+
+        /* Responsive adjustments for smaller screens */
+        @media (max-width: 320px) {
+            #game-container {
+                padding: 10px;
+            }
+            button {
+                padding: 12px 20px;
+                font-size: 1em;
+            }
+            .paint-button {
+                padding: 20px 0;
+                font-size: 1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="game-start-screen">
+            <h1>カラーミキシングゲーム</h1>
+            <p>
+                ターゲットと同じ色になるように、赤、黄、青の絵の具を混ぜてみましょう！<br>
+                タップで絵の具の量を増やし、決定ボタンで提出します。<br>
+                制限時間内にどれだけ正確な色を作れるかを競いましょう！
+            </p>
+            <button id="start-button">ゲーム開始</button>
+        </div>
+
+        <div id="game-screen" style="display: none;">
+            <div id="header">
+                <div id="timer">残り時間: <span>60</span>秒</div>
+                <div id="score">スコア: <span>0</span></div>
+            </div>
+
+            <div id="color-display">
+                <div class="color-box" id="target-color"></div>
+                <div class="color-box" id="mixed-color"></div>
+            </div>
+
+            <div id="paint-buttons">
+                <button id="red-paint" class="paint-button">赤</button>
+                <button id="yellow-paint" class="paint-button">黄</button>
+                <button id="blue-paint" class="paint-button">青</button>
+            </div>
+
+            <div id="controls">
+                <button id="reset-button">リセット</button>
+                <button id="submit-button">決定</button>
+            </div>
+        </div>
+
+        <div id="game-end-screen" style="display: none;">
+            <h1>ゲーム終了！</h1>
+            <p>最終スコア: <span id="final-score">0</span></p>
+            <button id="retry-button">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <script>
+        const GAME_DURATION = 60; // ゲーム時間 (秒)
+        const PAINT_STEP = 20;    // 絵の具をタップしたときの増量
+        const MAX_PAINT_AMOUNT = 255; // 各絵の具の最大量
+
+        let totalScore = 0;
+        let timeLeft = GAME_DURATION;
+        let timerInterval;
+
+        let targetR, targetG, targetB; // ターゲットのRGB値
+        let mixR, mixG, mixB;          // ユーザーが混ぜる絵の具の量 (0-MAX_PAINT_AMOUNT)
+
+        // DOM要素の取得
+        const gameStartScreen = document.getElementById('game-start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const gameEndScreen = document.getElementById('game-end-screen');
+
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+
+        const timerDisplay = document.querySelector('#timer span');
+        const scoreDisplay = document.querySelector('#score span');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        const targetColorBox = document.getElementById('target-color');
+        const mixedColorBox = document.getElementById('mixed-color');
+
+        const redPaintButton = document.getElementById('red-paint');
+        const yellowPaintButton = document.getElementById('yellow-paint');
+        const bluePaintButton = document.getElementById('blue-paint');
+        const resetButton = document.getElementById('reset-button');
+        const submitButton = document.getElementById('submit-button');
+
+        // イベントリスナーの設定
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+        redPaintButton.addEventListener('click', () => addPaint('red'));
+        yellowPaintButton.addEventListener('click', () => addPaint('yellow'));
+        bluePaintButton.addEventListener('click', () => addPaint('blue'));
+        resetButton.addEventListener('click', resetCurrentMix);
+        submitButton.addEventListener('click', submitColor);
+
+        // ゲーム開始
+        function startGame() {
+            totalScore = 0;
+            timeLeft = GAME_DURATION;
+            mixR = 0; mixG = 0; mixB = 0; // 各絵の具の初期量
+
+            gameStartScreen.style.display = 'none';
+            gameEndScreen.style.display = 'none';
+            gameScreen.style.display = 'flex'; // Use flex for game screen
+
+            updateUI();
+            resetCurrentMix(); // 現在の混色をリセットして初期表示
+            generateTargetColor();
+
+            clearInterval(timerInterval);
+            timerInterval = setInterval(() => {
+                timeLeft--;
+                updateUI();
+                if (timeLeft <= 0) {
+                    endGame();
+                }
+            }, 1000);
+        }
+
+        // ターゲット色の生成
+        function generateTargetColor() {
+            targetR = Math.floor(Math.random() * 256);
+            targetG = Math.floor(Math.random() * 256);
+            targetB = Math.floor(Math.random() * 256);
+            targetColorBox.style.backgroundColor = `rgb(${targetR}, ${targetG}, ${targetB})`;
+            targetColorBox.removeAttribute('data-label'); // Remove 'ターゲット' label after color is set
+        }
+
+        // 絵の具の混色ロジック
+        // 「赤」「黄」「青」の絵の具を、RGB成分の加算で表現する。
+        // これは厳密な減法混色ではないが、直感的な色の変化を再現する。
+        function addPaint(colorType) {
+            switch (colorType) {
+                case 'red':    
+                    mixR = Math.min(MAX_PAINT_AMOUNT, mixR + PAINT_STEP); 
+                    // 青を少し減らすことで赤の純度を保つ
+                    mixB = Math.max(0, mixB - Math.floor(PAINT_STEP * 0.2)); 
+                    break;
+                case 'yellow': 
+                    mixR = Math.min(MAX_PAINT_AMOUNT, mixR + PAINT_STEP); 
+                    mixG = Math.min(MAX_PAINT_AMOUNT, mixG + PAINT_STEP); 
+                    // 黄色はRとGの光を混ぜることで表現
+                    mixB = Math.max(0, mixB - Math.floor(PAINT_STEP * 0.5)); // 青を吸収する
+                    break;
+                case 'blue':   
+                    mixB = Math.min(MAX_PAINT_AMOUNT, mixB + PAINT_STEP); 
+                    // 黄色と赤を少し減らすことで青の純度を保つ
+                    mixR = Math.max(0, mixR - Math.floor(PAINT_STEP * 0.2)); 
+                    mixG = Math.max(0, mixG - Math.floor(PAINT_STEP * 0.2));
+                    break;
+            }
+            updateMixedColor();
+        }
+
+        // 現在の混色をリセット
+        function resetCurrentMix() {
+            mixR = 0; mixG = 0; mixB = 0; // 各絵の具の量をリセット
+            mixedColorBox.style.backgroundColor = `rgb(${mixR}, ${mixG}, ${mixB})`; // 黒からスタート
+            mixedColorBox.setAttribute('data-label', '作成中'); // Restore label on reset
+            updateMixedColor(); // 念のため更新
+        }
+
+        // 混ぜた色を更新して表示
+        function updateMixedColor() {
+            // ここでmixR, mixG, mixBから最終的な表示色 currentR, currentG, currentB を計算する
+            // シンプルな加法混色モデルを採用。それぞれの絵の具の量でRGB値を決める。
+            // R, G, Bの値をそれぞれ0-255にクランプ
+            const currentR = Math.min(255, Math.max(0, mixR));
+            const currentG = Math.min(255, Math.max(0, mixG));
+            const currentB = Math.min(255, Math.max(0, mixB));
+            
+            mixedColorBox.style.backgroundColor = `rgb(${currentR}, ${currentG}, ${currentB})`;
+            mixedColorBox.removeAttribute('data-label'); // Remove '作成中' label after color is set
+        }
+
+        // 色の提出とスコア計算
+        function submitColor() {
+            // 現在の混色色を算出
+            const currentR = Math.min(255, Math.max(0, mixR));
+            const currentG = Math.min(255, Math.max(0, mixG));
+            const currentB = Math.min(255, Math.max(0, mixB));
+
+            // ターゲット色と現在の混色の差を計算
+            const diffR = Math.abs(targetR - currentR);
+            const diffG = Math.abs(targetG - currentG);
+            const diffB = Math.abs(targetB - currentB);
+
+            // 色距離 (ユークリッド距離) を計算
+            const colorDistance = Math.sqrt(diffR * diffR + diffG * diffG + diffB * diffB);
+            // 最大距離 (例: 純粋な白 vs 純粋な黒)
+            const maxDistance = Math.sqrt(255 * 255 * 3); 
+
+            // 距離に基づいてスコアを計算 (0-100点)
+            // 距離が0なら100点、maxDistanceなら0点
+            const roundScore = Math.max(0, 100 - Math.round((colorDistance / maxDistance) * 100));
+            totalScore += roundScore;
+
+            updateUI();
+            resetCurrentMix(); // 次のラウンドのために混色をリセット
+            generateTargetColor(); // 新しいターゲット色を生成
+        }
+
+        // UIの更新
+        function updateUI() {
+            timerDisplay.textContent = timeLeft;
+            scoreDisplay.textContent = totalScore;
+        }
+
+        // ゲーム終了
+        function endGame() {
+            clearInterval(timerInterval);
+            finalScoreDisplay.textContent = totalScore;
+
+            gameScreen.style.display = 'none';
+            gameEndScreen.style.display = 'flex';
+        }
+
+        // 初期表示
+        gameStartScreen.style.display = 'flex';
+        gameScreen.style.display = 'none';
+        gameEndScreen.style.display = 'none';
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

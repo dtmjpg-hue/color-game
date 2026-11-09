@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>カテゴリタップゲーム</title>
+    <style>
+        /* 基本スタイル */
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            user-select: none; /* テキスト選択を無効化 */
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* IE/Edge */
+            touch-action: manipulation; /* タップの遅延などを防ぐ */
+        }
+
+        /* ゲームコンテナ */
+        #game-container {
+            width: 100%;
+            max-width: 450px; /* スマートフォン縦画面を想定 */
+            height: 100%;
+            max-height: 800px; /* スマートフォン縦画面を想定 */
+            display: flex;
+            flex-direction: column;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+        }
+
+        /* ヘッダー (スコア、ターゲットカテゴリ、時間) */
+        #header {
+            width: 100%;
+            padding: 10px 0;
+            background-color: #e0f2f7;
+            border-bottom: 2px solid #a7d9ed;
+            display: flex;
+            justify-content: space-around;
+            align-items: center;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        #score-display, #target-category-display, #time-display {
+            flex: 1;
+            text-align: center;
+        }
+
+        /* オブジェクト表示エリア */
+        #object-area {
+            flex-grow: 1;
+            position: relative;
+            overflow: hidden;
+            background-color: #f8f8f8;
+            cursor: pointer; /* 誤タップ時にカーソルが変わるように (PCテスト用) */
+        }
+
+        /* ゲームオブジェクト */
+        .game-object {
+            position: absolute;
+            width: 70px; /* オブジェクトサイズ */
+            height: 70px;
+            line-height: 70px; /* 垂直中央揃え */
+            text-align: center;
+            background-color: #add8e6;
+            border-radius: 15px;
+            font-size: 2.5em; /* 絵文字のサイズ */
+            cursor: pointer;
+            box-shadow: 3px 3px 7px rgba(0, 0, 0, 0.3);
+            transition: transform 0.1s ease-out, background-color 0.1s ease-out;
+            will-change: transform; /* パフォーマンス改善 */
+        }
+
+        .game-object:active {
+            transform: scale(0.95);
+            background-color: #9acfe1;
+        }
+
+        /* ゲームオーバー画面 */
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            font-size: 1.5em;
+            text-align: center;
+        }
+
+        #game-over-screen h2 {
+            margin-bottom: 20px;
+            font-size: 2em;
+        }
+
+        #final-score {
+            margin-bottom: 30px;
+            font-size: 1.8em;
+            color: #ffd700; /* ゴールド */
+        }
+
+        /* ボタン */
+        #retry-button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.2s ease, transform 0.2s ease;
+        }
+
+        #retry-button:hover {
+            background-color: #45a049;
+            transform: translateY(-2px);
+        }
+
+        #retry-button:active {
+            transform: translateY(0);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+        }
+
+        /* ユーティリティクラス */
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="header">
+            <div id="score-display">スコア: 0</div>
+            <div id="target-category-display">ターゲット: 選択中...</div>
+            <div id="time-display">時間: 0</div>
+        </div>
+        <div id="object-area">
+            <!-- ゲームオブジェクトがここに動的に追加されます -->
+        </div>
+        <div id="game-over-screen" class="hidden">
+            <h2>ゲーム終了！</h2>
+            <div id="final-score">最終スコア: 0</div>
+            <button id="retry-button">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <script>
+        // ゲームデータ
+        const categories = {
+            "動物": ["🐶", "🐱", "🐰", "🐘", "🐠", "🐧", "🐒", "🐎"],
+            "食べ物": ["🍎", "🍞", "🍚", "🍕", "🍦", "🍓", "🍜", "🍔"],
+            "乗り物": ["🚗", "✈️", "🚢", "🚲", "🚀", "🚂", "🚁", "🏍️"],
+            "自然": ["🌳", "🌸", "☀️", "💧", "🌈", "🏔️", "🌊", "🍄"],
+            "道具": ["✂️", "🔨", "🔑", "💡", "📱", "⌚", "📖", "✏️"]
+        };
+        const categoryNames = Object.keys(categories);
+
+        // DOM要素
+        const scoreDisplay = document.getElementById('score-display');
+        const targetCategoryDisplay = document.getElementById('target-category-display');
+        const timeDisplay = document.getElementById('time-display');
+        const objectArea = document.getElementById('object-area');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const retryButton = document.getElementById('retry-button');
+
+        // ゲーム変数
+        let score = 0;
+        let targetCategory = "";
+        let gameTime = 30; // 秒
+        let timerInterval;
+        let objectCreationInterval;
+        let currentObjects = []; // 表示中のオブジェクトを管理 (DOM要素とタイムアウトID)
+        const MAX_OBJECTS_ON_SCREEN = 8; // 画面に同時に表示するオブジェクトの最大数
+        const OBJECT_AUTO_REMOVE_TIME = 4000; // オブジェクトが自動で消えるまでの時間 (ms)
+        const OBJECT_SPAWN_INTERVAL = 800; // 新しいオブジェクトが生成される間隔 (ms)
+        const SCORE_CORRECT = 10;
+        const SCORE_INCORRECT = -5;
+        const SCORE_MISS_TAP = -3; // オブジェクトがない場所をタップした場合
+
+        // ゲーム開始
+        function startGame() {
+            // 変数初期化
+            score = 0;
+            gameTime = 30;
+            currentObjects = [];
+
+            // UIリセット
+            scoreDisplay.textContent = `スコア: ${score}`;
+            timeDisplay.textContent = `時間: ${gameTime}`;
+            gameOverScreen.classList.add('hidden');
+            clearObjectArea();
+
+            // 新しいターゲットカテゴリを設定
+            setNewTargetCategory();
+
+            // オブブジェクトエリアへのクリックイベントリスナー設定 (誤タップ判定用)
+            // 既にリスナーが登録されていても、再度登録すると重複するので、一度削除してから追加
+            objectArea.removeEventListener('click', handleMissTap);
+            objectArea.addEventListener('click', handleMissTap);
+
+            // タイマーとオブジェクト生成を開始
+            startTimer();
+            startObjectCreation();
+        }
+
+        // ターゲットカテゴリの変更
+        function setNewTargetCategory() {
+            let newCategory;
+            do {
+                newCategory = categoryNames[Math.floor(Math.random() * categoryNames.length)];
+            } while (newCategory === targetCategory && categoryNames.length > 1); // 複数カテゴリがある場合、同じカテゴリが続かないようにする
+            targetCategory = newCategory;
+            targetCategoryDisplay.textContent = `ターゲット: ${targetCategory}`;
+        }
+
+        // タイマー開始
+        function startTimer() {
+            clearInterval(timerInterval); // 既存のタイマーをクリア
+            timerInterval = setInterval(() => {
+                gameTime--;
+                timeDisplay.textContent = `時間: ${gameTime}`;
+                if (gameTime <= 0) {
+                    endGame();
+                }
+            }, 1000);
+        }
+
+        // オブジェクト生成開始
+        function startObjectCreation() {
+            clearInterval(objectCreationInterval); // 既存の生成タイマーをクリア
+            objectCreationInterval = setInterval(() => {
+                if (currentObjects.length < MAX_OBJECTS_ON_SCREEN) {
+                    createObject();
+                }
+            }, OBJECT_SPAWN_INTERVAL);
+        }
+
+        // オブジェクト生成
+        function createObject() {
+            const objectDiv = document.createElement('div');
+            objectDiv.classList.add('game-object');
+
+            // ランダムなカテゴリとオブジェクトを選択
+            const randomCategoryName = categoryNames[Math.floor(Math.random() * categoryNames.length)];
+            const objectsInRandomCategory = categories[randomCategoryName];
+            const randomObject = objectsInRandomCategory[Math.floor(Math.random() * objectsInRandomCategory.length)];
+
+            objectDiv.textContent = randomObject;
+            objectDiv.dataset.category = randomCategoryName; // データ属性にカテゴリ情報を保存
+
+            // ランダムな位置を設定
+            // objectAreaのサイズを正確に取得し、オブジェクトのサイズを考慮して範囲を計算
+            const objWidth = objectDiv.offsetWidth || 70; // デフォルト値としてCSSの値を設定
+            const objHeight = objectDiv.offsetHeight || 70;
+
+            const areaWidth = objectArea.clientWidth - objWidth;
+            const areaHeight = objectArea.clientHeight - objHeight;
+
+            const randomX = Math.random() * areaWidth;
+            const randomY = Math.random() * areaHeight;
+
+            objectDiv.style.left = `${randomX}px`;
+            objectDiv.style.top = `${randomY}px`;
+
+            // タップイベントリスナー
+            objectDiv.addEventListener('click', handleObjectClick);
+
+            objectArea.appendChild(objectDiv);
+
+            // 自動削除タイマー
+            const autoRemoveTimer = setTimeout(() => {
+                removeObject(objectDiv);
+                // タップしなかった場合は減点なし、単に消える
+            }, OBJECT_AUTO_REMOVE_TIME);
+
+            currentObjects.push({ element: objectDiv, timer: autoRemoveTimer });
+        }
+
+        // オブジェクトを削除
+        function removeObject(objElement) {
+            const index = currentObjects.findIndex(obj => obj.element === objElement);
+            if (index > -1) {
+                clearTimeout(currentObjects[index].timer); // 自動削除タイマーをクリア
+                currentObjects.splice(index, 1);
+                objElement.remove();
+            }
+        }
+
+        // オブジェクトタップ処理
+        function handleObjectClick(event) {
+            event.stopPropagation(); // objectAreaへのイベント伝播を停止 (誤タップ判定を防ぐ)
+
+            const clickedObject = event.target;
+            const objectCategory = clickedObject.dataset.category;
+
+            if (objectCategory === targetCategory) {
+                score += SCORE_CORRECT;
+                setNewTargetCategory(); // 正解したらターゲットカテゴリを変更
+            } else {
+                score += SCORE_INCORRECT;
+            }
+            scoreDisplay.textContent = `スコア: ${score}`;
+            removeObject(clickedObject);
+        }
+
+        // オブジェクトがない場所をタップした時の処理 (誤タップ)
+        function handleMissTap(event) {
+            // event.targetがobjectArea自身である場合に限り、誤タップと判断
+            if (event.target === objectArea) {
+                score += SCORE_MISS_TAP;
+                scoreDisplay.textContent = `スコア: ${score}`;
+            }
+        }
+
+        // ゲーム終了
+        function endGame() {
+            clearInterval(timerInterval);
+            clearInterval(objectCreationInterval);
+            clearObjectArea();
+            objectArea.removeEventListener('click', handleMissTap); // 誤タップ判定も停止
+
+            finalScoreDisplay.textContent = `最終スコア: ${score}`;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        // オブジェクトエリア内のオブジェクトを全てクリア
+        function clearObjectArea() {
+            currentObjects.forEach(obj => {
+                clearTimeout(obj.timer);
+                obj.element.remove();
+            });
+            currentObjects = [];
+        }
+
+        // ページロード時にゲームを開始し、リトライボタンのリスナーを設定
+        document.addEventListener('DOMContentLoaded', () => {
+            startGame();
+            retryButton.addEventListener('click', startGame); // リトライボタンのリスナーは一度だけ設定
+        });
+    </script>
+</body>
+</html>

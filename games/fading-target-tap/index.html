@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ターゲット瞬撃</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden; /* スクロールを防止 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh; /* 縦画面全体を使用 */
+            background-color: #222;
+            color: #eee;
+            font-family: 'Arial', sans-serif;
+            -webkit-user-select: none; /* iOS Safariで長押し選択を防ぐ */
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        #score-display {
+            width: 100%;
+            text-align: center;
+            padding: 10px 0;
+            font-size: 1.5em;
+            font-weight: bold;
+            background-color: #444;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+            z-index: 10;
+        }
+
+        #game-area {
+            width: 100vw; /* 画面の横幅全体を使用 */
+            /* スコア表示の高さ分を引いて、残りの高さをゲームエリアにする */
+            height: calc(100vh - 60px); /* score-displayの高さが約60pxと仮定 */
+            position: relative;
+            overflow: hidden;
+            background-color: #333;
+            cursor: pointer;
+            touch-action: manipulation; /* タップイベントの遅延を防ぐ */
+        }
+
+        .target {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            opacity: 1;
+            transform: scale(1);
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.5); /* 全てのターゲットに白っぽい影 */
+            transition: background-color 0.2s ease-out; /* 色変化を滑らかに */
+        }
+
+        /* ターゲットがフェードアウト＆縮小するアニメーション */
+        .target.hide {
+            animation: fadeOutShrink 1.2s forwards;
+        }
+
+        @keyframes fadeOutShrink {
+            from {
+                opacity: 1;
+                transform: scale(1);
+            }
+            to {
+                opacity: 0;
+                transform: scale(0.5);
+            }
+        }
+
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 100;
+            font-size: 1.8em;
+            display: none; /* 初期は非表示 */
+            text-align: center;
+            line-height: 1.5;
+        }
+
+        #final-score {
+            margin-bottom: 20px;
+            font-weight: bold;
+            color: #fff;
+        }
+
+        #retry-button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            cursor: pointer;
+            background-color: #0a0;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.3s ease;
+        }
+
+        #retry-button:active {
+            background-color: #080;
+            box-shadow: 0 2px 3px rgba(0, 0, 0, 0.3);
+            transform: translateY(1px);
+        }
+    </style>
+</head>
+<body>
+    <div id="score-display">スコア: 0 (コンボ: 0 / ミス: 0 / 5)</div>
+    <div id="game-area"></div>
+    <div id="game-over-screen">
+        <p>ゲームオーバー！</p>
+        <p id="final-score"></p>
+        <button id="retry-button">リトライ</button>
+    </div>
+
+    <script>
+        const gameArea = document.getElementById('game-area');
+        const scoreDisplay = document.getElementById('score-display');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const retryButton = document.getElementById('retry-button');
+
+        let score = 0;
+        let combo = 0;
+        let missCount = 0;
+        let gameRunning = false;
+
+        const MAX_MISSES = 5; // 許容されるミスの最大回数
+        const TARGET_LIFETIME_MS = 1200; // ターゲットが表示されてから消えるまでの時間 (CSSアニメーションと同期)
+
+        // ターゲットに設定するランダムな色
+        const targetColors = ['#f00', '#0f0', '#00f', '#ff0', '#0ff', '#f0f']; 
+
+        /** スコア表示を更新する */
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = `スコア: ${score} (コンボ: ${combo} / ミス: ${missCount} / ${MAX_MISSES})`;
+        }
+
+        /** ゲームを開始する */
+        function startGame() {
+            score = 0;
+            combo = 0;
+            missCount = 0;
+            gameRunning = true;
+            gameOverScreen.style.display = 'none';
+            clearAllTargets(); // 既存のターゲットをすべて削除
+            updateScoreDisplay();
+            createTarget(); // 最初のターゲットを生成
+        }
+
+        /** ゲームオーバー処理 */
+        function gameOver() {
+            gameRunning = false;
+            finalScoreDisplay.textContent = `最終スコア: ${score}点`;
+            gameOverScreen.style.display = 'flex';
+            clearAllTargets(); // ゲームオーバー時に残っているターゲットをすべて削除
+        }
+
+        /** 現在表示されているターゲットをすべて削除する */
+        function clearAllTargets() {
+            gameArea.innerHTML = '';
+        }
+
+        /** 新しいターゲットを生成してゲームエリアに追加する */
+        function createTarget() {
+            if (!gameRunning) return;
+
+            const target = document.createElement('div');
+            target.classList.add('target');
+
+            // ランダムな色を設定
+            target.style.backgroundColor = targetColors[Math.floor(Math.random() * targetColors.length)];
+
+            // 位置をランダムに設定
+            const targetSize = 50; // CSSで指定しているターゲットのサイズ
+            const gameAreaRect = gameArea.getBoundingClientRect();
+            const maxX = gameAreaRect.width - targetSize;
+            const maxY = gameAreaRect.height - targetSize;
+
+            // 画面端から少し離れた位置に出現させるためのパディング
+            const padding = 10;
+            const x = Math.random() * (maxX - padding * 2) + padding;
+            const y = Math.random() * (maxY - padding * 2) + padding;
+
+            target.style.left = x + 'px';
+            target.style.top = y + 'px';
+
+            target.dataset.spawnTime = Date.now(); // ターゲットの出現時刻をデータ属性に保存
+
+            // ターゲットがタップされた時のイベントリスナー
+            target.addEventListener('touchstart', handleTargetTap, { passive: false }); 
+            
+            // アニメーションを適用して時間経過で消えるようにする
+            target.classList.add('hide');
+            // アニメーション終了時のイベントリスナー (時間切れミス判定)
+            target.addEventListener('animationend', handleTargetMiss);
+
+            gameArea.appendChild(target);
+        }
+
+        /** ターゲットがタップされた時の処理 */
+        function handleTargetTap(event) {
+            if (!gameRunning) return;
+
+            event.preventDefault(); // タップによるスクロールやズームなどを防ぐ
+            const target = event.target;
+
+            // タップされた要素がターゲットでなければ処理しない
+            if (!target.classList.contains('target')) {
+                return;
+            }
+
+            const tapTime = Date.now();
+            const spawnTime = parseInt(target.dataset.spawnTime, 10);
+            const reactionTime = tapTime - spawnTime; // 反応時間 (ミリ秒)
+
+            let basePoints = 100;
+            // 反応速度ボーナス: 早いほどボーナスが増える (最大50点)
+            // TARGET_LIFETIME_MSの10分の1(120ms)ごとに10点減。
+            basePoints += Math.max(0, 50 - Math.floor(reactionTime / (TARGET_LIFETIME_MS / 10)));
+            
+            combo++; // コンボ数を増やす
+            score += basePoints * combo; // コンボ数に応じてスコア増加
+
+            // ヒットしたので、このターゲットの時間切れミス判定は不要になる
+            target.removeEventListener('animationend', handleTargetMiss);
+            target.remove(); // ターゲットをDOMから削除
+
+            updateScoreDisplay();
+            createTarget(); // 次のターゲットを生成
+        }
+
+        /** ターゲットが時間切れで消えた（アニメーション終了した）時の処理 (ミス判定) */
+        function handleTargetMiss(event) {
+            if (!gameRunning) return;
+
+            // アニメーション終了イベントがターゲット自体から発生した場合のみ処理
+            if (event.target.classList.contains('target')) {
+                const target = event.target;
+                
+                combo = 0; // コンボリセット
+                missCount++; // ミスカウントを増やす
+                
+                target.remove(); // ターゲットをDOMから削除
+
+                updateScoreDisplay(); // スコア表示を更新 (コンボがリセットされたことを反映)
+                if (missCount >= MAX_MISSES) {
+                    gameOver(); // ミス回数が上限に達したらゲームオーバー
+                } else {
+                    createTarget(); // 次のターゲットを生成
+                }
+            }
+        }
+
+        // ゲームエリアの何もない部分をタップした場合のミス判定
+        gameArea.addEventListener('touchstart', (event) => {
+            if (!gameRunning) return;
+            // タップした要素がターゲット要素でなければ、プレイヤーのタップミスと判定
+            if (!event.target.classList.contains('target')) {
+                combo = 0; // コンボリセット
+                missCount++; // ミスカウントを増やす
+                updateScoreDisplay();
+                if (missCount >= MAX_MISSES) {
+                    gameOver();
+                }
+                // この場合、既存のターゲットは消さず、新しいターゲットも生成しない。
+                // 既存のターゲットは時間切れで消えるか、プレイヤーがタップするまで残る。
+            }
+        }, { passive: false });
+
+        // リトライボタンがクリックされたらゲームを再開
+        retryButton.addEventListener('click', startGame);
+
+        // ページ読み込み時にゲームを開始
+        startGame();
+    </script>
+</body>
+</html>

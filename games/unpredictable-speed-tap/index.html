@@ -160,7 +160,6 @@
     <div id="stats">
       <span>スコア <span id="score">0</span></span>
       <span>レベル <span id="level">1</span></span>
-      <span>のこり <span id="time">45</span>秒</span>
       <span>ミス <span id="missCount">0</span>/3</span>
     </div>
     <div id="instructionBox">ターゲットが中心円に合わさったらタップ！</div>
@@ -181,7 +180,7 @@
 <script>
 (function () {
   // ゲーム定数
-  var GAME_SECONDS = 45; // 制限時間（秒）
+  // var GAME_SECONDS = 45; // 制限時間をなくすため削除
   var PERFECT_HIT_WINDOW = 100; // 判定許容範囲（ミリ秒）
   var TARGET_RADIUS = 30; // 移動ターゲットの半径
   var CENTER_TARGET_RADIUS = 60; // 中心ターゲットの半径
@@ -200,7 +199,7 @@
   // DOM要素の取得
   var field = document.getElementById("field");
   var scoreEl = document.getElementById("score");
-  var timeEl = document.getElementById("time");
+  // var timeEl = document.getElementById("time"); // 制限時間をなくすため削除
   var levelEl = document.getElementById("level"); // レベル表示要素
   var missCountEl = document.getElementById("missCount"); // ミス回数表示要素
   var instructionBox = document.getElementById("instructionBox");
@@ -212,9 +211,9 @@
 
   // ゲーム状態変数
   var score = 0;
-  var timeLeft = 0;
+  // var timeLeft = 0; // 制限時間をなくすため削除
   var running = false; // ゲームが実行中か
-  var clockInterval = null; // 制限時間のsetIntervalID
+  var clockInterval = null; // 速度上昇のsetIntervalID
   var activeTarget = null; // 現在移動中のターゲットオブジェクトを保持
 
   // 難易度・進行度に関する変数
@@ -241,9 +240,9 @@
   // レベル表示の更新
   function updateLevelDisplay() {
     // 総合的な実効速度に基づいてレベルを計算
-    // 例えば、初期速度からの増加量100px/sごとに1レベルアップとする
+    // 例えば、初期速度からの増加量30px/sごとに1レベルアップとする
     var totalEffectiveSpeed = currentBaseSpeed + playerSpeedBonus;
-    currentLevel = 1 + Math.floor((totalEffectiveSpeed - BASE_TARGET_SPEED_PX_PER_SEC) / 30); // 30px/s 増加ごとに1レベル
+    currentLevel = 1 + Math.floor((totalEffectiveSpeed - BASE_TARGET_SPEED_PX_PER_SEC) / 30);
     if (currentLevel < 1) currentLevel = 1; // 最低レベルは1
     levelEl.textContent = String(currentLevel);
   }
@@ -448,18 +447,11 @@
     }
   }
 
-  // 1秒ごとのタイマー処理
+  // 1秒ごとのタイマー処理（速度上昇のみ）
   function tick() {
-    timeLeft -= 1;
-    timeEl.textContent = String(Math.max(0, timeLeft));
-
+    // timeLeftに関する処理は削除
     currentBaseSpeed += SPEED_INCREASE_PER_SEC; // 時間経過で基本速度アップ
     updateLevelDisplay(); // レベル表示更新
-
-    if (timeLeft <= 0) {
-      endGame("タイムアップ!"); // 制限時間切れでゲーム終了
-      return;
-    }
   }
 
   // ゲーム開始処理
@@ -467,13 +459,13 @@
     field.innerHTML = ""; // フィールドをクリア
     field.appendChild(centerTargetEl); // 中心ターゲットを再配置
     setScore(0); // スコアをリセット
-    timeLeft = GAME_SECONDS; // 残り時間を設定
-    timeEl.textContent = String(timeLeft);
+    // timeLeft = GAME_SECONDS; // 制限時間をなくすため削除
+    // timeEl.textContent = String(timeLeft); // 制限時間をなくすため削除
     overlay.style.display = "none"; // オーバーレイを非表示に
     running = true; // ゲーム実行中に設定
     activeTarget = null; // アクティブターゲットをリセット
     clearInterval(clockInterval); // 既存のタイマーがあればクリア
-    clockInterval = setInterval(tick, 1000); // 1秒ごとのタイマーを開始
+    clockInterval = setInterval(tick, 1000); // 1秒ごとのタイマーを開始 (速度上昇用)
 
     // 新しいゲーム変数の初期化
     currentBaseSpeed = BASE_TARGET_SPEED_PX_PER_SEC;

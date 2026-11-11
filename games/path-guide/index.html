@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>ターゲット誘導ゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #222;
+            font-family: 'Arial', sans-serif;
+            color: #eee;
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none;    /* Firefox */
+            -ms-user-select: none;     /* Internet Explorer/Edge */
+            user-select: none;         /* Standard */
+        }
+        #game-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            /* スマートフォン縦画面を意識した最大幅と高さ */
+            max-width: 500px;
+            max-height: 800px;
+            background-color: #000;
+            overflow: hidden;
+            touch-action: none; /* ピンチズームやデフォルトのスクロールなどを防ぐ */
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.8);
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+        }
+        #ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+            pointer-events: none; /* UI要素の下のキャンバスをタップできるように */
+            z-index: 10;
+        }
+        #score-display {
+            font-size: 1.8em;
+            padding: 10px 20px;
+            background-color: rgba(0, 0, 0, 0.6);
+            border-radius: 0 0 10px 10px;
+            margin-top: 0;
+            pointer-events: auto; /* スコア自体は触れない */
+            display: flex;
+            gap: 20px;
+            justify-content: space-around;
+            width: calc(100% - 40px); /* 左右padding分を引く */
+            color: #fff;
+            box-sizing: border-box; /* paddingをwidthに含める */
+        }
+        .message-box {
+            background-color: rgba(0, 0, 0, 0.85);
+            padding: 30px 20px;
+            border-radius: 15px;
+            text-align: center;
+            pointer-events: auto; /* ボタンが押せるように */
+            max-width: 80%;
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.6);
+        }
+        .message-box h1 {
+            color: #00ffff;
+            margin-top: 0;
+            font-size: 2.2em;
+            margin-bottom: 20px;
+        }
+        .message-box p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin-bottom: 25px;
+            color: #eee;
+        }
+        .message-box button {
+            background-color: #00ffff;
+            color: #000;
+            border: none;
+            padding: 18px 40px;
+            font-size: 1.6em;
+            font-weight: bold;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            box-shadow: 0 5px 15px rgba(0, 255, 255, 0.4);
+        }
+        .message-box button:active {
+            transform: translateY(2px);
+            box-shadow: 0 3px 10px rgba(0, 255, 255, 0.4);
+        }
+        #game-over-screen {
+            display: none; /* 初期は非表示 */
+        }
+        #start-screen {
+            display: flex; /* 初期は表示 */
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            height: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            background-color: rgba(0, 0, 0, 0.7); /* ゲーム開始前の暗幕 */
+        }
+        #final-score {
+            color: #00ffff;
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <canvas id="gameCanvas"></canvas>
+        <div id="ui-overlay">
+            <div id="score-display">
+                <span>スコア: <span id="current-score">0</span></span>
+                <span>ミス: <span id="current-lives">0</span>/3</span>
+            </div>
+            <div id="start-screen">
+                <div class="message-box">
+                    <h1>ターゲット誘導ゲーム</h1>
+                    <p>画面外から飛んでくる点を、<br>中央のターゲットに誘導しよう！</p>
+                    <p>画面をタップして線を引き、<br>点の軌道を変えることができます。</p>
+                    <button id="start-button">スタート</button>
+                </div>
+            </div>
+            <div id="game-over-screen" class="message-box">
+                <h1>ゲームオーバー</h1>
+                <p>最終スコア: <span id="final-score">0</span></p>
+                <button id="retry-button">リトライ</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const gameContainer = document.getElementById('game-container');
+        const startScreen = document.getElementById('start-screen');
+        const startButton = document.getElementById('start-button');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const retryButton = document.getElementById('retry-button');
+        const scoreDisplay = document.getElementById('score-display');
+        const currentScoreSpan = document.getElementById('current-score');
+        const finalScoreSpan = document.getElementById('final-score');
+        const currentLivesSpan = document.getElementById('current-lives');
+
+        let animationFrameId;
+
+        // ゲーム状態管理
+        const GAME_STATE = {
+            INITIAL: 'initial',
+            PLAYING: 'playing',
+            GAME_OVER: 'gameOver'
+        };
+        let gameState = GAME_STATE.INITIAL;
+
+        // ゲーム設定
+        const PARTICLE_RADIUS = 8;
+        const TARGET_RADIUS = 30;
+        const PARTICLE_BASE_SPEED = 2; // 基本速度 (px/frame)
+        const PARTICLE_SPAWN_INTERVAL = 1500; // 点の生成間隔 (ms)
+        const MAX_LIVES = 3; // 画面外に逃した点の許容数
+        const GUIDELINE_LIFETIME = 2000; // 誘導線の表示時間 (ms)
+        const GUIDELINE_MIN_DIST = 5; // ガイドラインの点を追加する最小距離 (px)
+
+        let score = 0;
+        let lives = 0;
+        let particles = [];
+        let guidelines = [];
+        let target = {};
+        let lastParticleSpawnTime = 0;
+        let lastTimestamp = 0;
+
+        let isDrawing = false;
+        let currentGuideline = null;
+        let gameWidth, gameHeight;
+        let devicePixelRatio = window.devicePixelRatio || 1;
+
+        // -------------------- UI 表示/非表示 --------------------
+        function showScreen(screenElement) {
+            screenElement.style.display = 'flex';
+        }
+
+        function hideScreen(screenElement) {
+            screenElement.style.display = 'none';
+        }
+
+        function updateScoreDisplay() {
+            currentScoreSpan.textContent = score;
+            currentLivesSpan.textContent = `${lives}/${MAX_LIVES}`;
+        }
+
+        // -------------------- ゲームロジック --------------------
+        function resizeCanvas() {
+            // 親コンテナのサイズを取得 (CSSで設定された論理的なサイズ)
+            const containerRect = gameContainer.getBoundingClientRect();
+            gameWidth = containerRect.width;
+            gameHeight = containerRect.height;
+
+            // キャンバスの物理ピクセルサイズを設定 (高DPI対応)
+            canvas.width = gameWidth * devicePixelRatio;
+            canvas.height = gameHeight * devicePixelRatio;
+
+            // CSSでキャンバスの表示サイズを設定 (論理的なサイズ)
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+
+            // 描画コンテキストをスケーリング (論理的なピクセルで描画できるように)
+            ctx.scale(devicePixelRatio, devicePixelRatio);
+
+            // ターゲット位置を中央に設定
+            target = {
+                x: gameWidth / 2,
+                y: gameHeight / 2,
+                radius: TARGET_RADIUS,
+                color: '#00ffff', // ターゲットの通常色 (シアン)
+                hitEffectTime: 0 // ターゲットヒット時のエフェクト用タイムスタンプ
+            };
+        }
+
+        function initGame() {
+            score = 0;
+            lives = 0;
+            particles = [];
+            guidelines = [];
+            lastParticleSpawnTime = 0;
+            updateScoreDisplay();
+            resizeCanvas(); // ゲーム開始時にキャンバスサイズを調整
+        }
+
+        function startGame() {
+            hideScreen(startScreen);
+            hideScreen(gameOverScreen);
+            showScreen(scoreDisplay);
+            initGame();
+            gameState = GAME_STATE.PLAYING;
+            lastTimestamp = performance.now(); // 最初のフレームの時刻を設定
+            gameLoop(lastTimestamp); // ゲームループを開始
+        }
+
+        function endGame() {
+            gameState = GAME_STATE.GAME_OVER;
+            cancelAnimationFrame(animationFrameId); // アニメーションループを停止
+            showScreen(gameOverScreen);
+            hideScreen(scoreDisplay);
+            finalScoreSpan.textContent = score; // 最終スコアを表示
+        }
+
+        function spawnParticle() {
+            let startX, startY, vx, vy;
+            const edge = Math.floor(Math.random() * 4); // 0:上, 1:右, 2:下, 3:左
+
+            // 画面のどこから出現させるか (画面外少し離れた位置から)
+            switch (edge) {
+                case 0: // 上
+                    startX = Math.random() * gameWidth;
+                    startY = -PARTICLE_RADIUS * 2;
+                    break;
+                case 1: // 右
+                    startX = gameWidth + PARTICLE_RADIUS * 2;
+                    startY = Math.random() * gameHeight;
+                    break;
+                case 2: // 下
+                    startX = Math.random() * gameWidth;
+                    startY = gameHeight + PARTICLE_RADIUS * 2;
+                    break;
+                case 3: // 左
+                    startX = -PARTICLE_RADIUS * 2;
+                    startY = Math.random() * gameHeight;
+                    break;
+            }
+
+            // ターゲットへ向かう方向ベクトルを計算
+            let dx = target.x - startX;
+            let dy = target.y - startY;
+            const magnitude = Math.sqrt(dx * dx + dy * dy);
+
+            // 速度ベクトルを正規化し、PARTICLE_BASE_SPEEDをかける
+            vx = (dx / magnitude) * PARTICLE_BASE_SPEED;
+            vy = (dy / magnitude) * PARTICLE_BASE_SPEED;
+
+            particles.push({
+                x: startX,
+                y: startY,
+                vx: vx,
+                vy: vy,
+                radius: PARTICLE_RADIUS,
+                color: 'white',
+                hitGuidelineId: -1 // どのガイドラインにヒットしたか追跡 (初期値-1)
+            });
+        }
+
+        // 線分と線分の交差判定 (Intersection of two line segments)
+        // 参考: https://qiita.com/ykob/items/ab7f311c5210874e5020
+        function lineLineIntersection(p1, p2, p3, p4) {
+            const denom = (p4.y - p3.y) * (p2.x - p1.x) - (p4.x - p3.x) * (p2.y - p1.y);
+            if (denom === 0) return null; // 線が平行または同一直線上
+
+            const ua = ((p4.x - p3.x) * (p1.y - p3.y) - (p4.y - p3.y) * (p1.x - p3.x)) / denom;
+            const ub = ((p2.x - p1.x) * (p1.y - p3.y) - (p2.y - p1.y) * (p1.x - p3.x)) / denom;
+
+            // 交差点が両方の線分内にあるか判定
+            if (ua >= 0 && ua <= 1 && ub >= 0 && ub <= 1) {
+                return {
+                    x: p1.x + ua * (p2.x - p1.x),
+                    y: p1.y + ua * (p2.y - p1.y)
+                };
+            }
+            return null;
+        }
+
+        // -------------------- 描画 --------------------
+        function draw() {
+            ctx.clearRect(0, 0, gameWidth, gameHeight); // キャンバスをクリア
+
+            // ターゲットを描画
+            const targetColor = (performance.now() - target.hitEffectTime < 200) ? '#ff00ff' : target.color; // ヒット時はマゼンタに
+            ctx.beginPath();
+            ctx.arc(target.x, target.y, target.radius, 0, Math.PI * 2);
+            ctx.fillStyle = targetColor;
+            ctx.fill();
+            ctx.strokeStyle = '#fff';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // ガイドラインを描画
+            const currentTime = performance.now();
+            guidelines.forEach(g => {
+                const age = currentTime - g.creationTime;
+                if (age < GUIDELINE_LIFETIME) {
+                    const alpha = 1 - (age / GUIDELINE_LIFETIME); // 時間経過で透明度を変化
+                    ctx.beginPath();
+                    ctx.moveTo(g.points[0].x, g.points[0].y);
+                    for (let i = 1; i < g.points.length; i++) {
+                        ctx.lineTo(g.points[i].x, g.points[i].y);
+                    }
+                    ctx.strokeStyle = `rgba(0, 255, 255, ${alpha})`; // シアンで描画
+                    ctx.lineWidth = 5;
+                    ctx.lineCap = 'round'; // 線の端を丸く
+                    ctx.lineJoin = 'round'; // 線同士の接続を丸く
+                    ctx.stroke();
+                }
+            });
+
+            // パーティクルを描画
+            particles.forEach(p => {
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+                ctx.fillStyle = p.color;
+                ctx.fill();
+            });
+        }
+
+        // -------------------- 更新 --------------------
+        function update(deltaTime) {
+            const currentTime = performance.now();
+
+            // 新しいパーティクルを生成
+            if (currentTime - lastParticleSpawnTime > PARTICLE_SPAWN_INTERVAL) {
+                spawnParticle();
+                lastParticleSpawnTime = currentTime;
+            }
+
+            // 寿命切れのガイドラインをクリーンアップ
+            guidelines = guidelines.filter(g => currentTime - g.creationTime < GUIDELINE_LIFETIME);
+
+            // パーティクルの更新
+            for (let i = particles.length - 1; i >= 0; i--) {
+                const p = particles[i];
+
+                // フレームレートに依存しない移動量の計算
+                const moveAmount = deltaTime / 16.66; // 16.66msは約60fpsの1フレーム時間
+
+                // 次のフレームの位置を予測
+                const nextX = p.x + p.vx * moveAmount;
+                const nextY = p.y + p.vy * moveAmount;
+
+                // 誘導線との衝突判定と軌道変更
+                // パーティクルの現在の位置から予測される次の位置への線分
+                const particlePathStart = { x: p.x, y: p.y };
+                const particlePathEnd = { x: nextX, y: nextY };
+
+                for (let j = 0; j < guidelines.length; j++) {
+                    const g = guidelines[j];
+                    if (g.id === p.hitGuidelineId) continue; // 同じガイドラインには一度しかヒットさせない
+
+                    for (let k = 0; k < g.points.length - 1; k++) {
+                        const lineSegmentStart = g.points[k];
+                        const lineSegmentEnd = g.points[k + 1];
+
+                        const intersection = lineLineIntersection(particlePathStart, particlePathEnd, lineSegmentStart, lineSegmentEnd);
+
+                        if (intersection) {
+                            // 衝突したセグメントの方向ベクトルを取得
+                            const lineVecX = lineSegmentEnd.x - lineSegmentStart.x;
+                            const lineVecY = lineSegmentEnd.y - lineSegmentStart.y;
+                            const lineMagnitude = Math.sqrt(lineVecX * lineVecX + lineVecY * lineVecY);
+
+                            if (lineMagnitude > 0) {
+                                // 速度の大きさを保ちつつ、方向をガイドラインに合わせる
+                                p.vx = (lineVecX / lineMagnitude) * PARTICLE_BASE_SPEED;
+                                p.vy = (lineVecY / lineMagnitude) * PARTICLE_BASE_SPEED;
+
+                                // 衝突位置から新しい方向に進むように、パーティクルの位置を更新
+                                // これにより、線に「食い込む」ことなくスムーズに軌道変更
+                                p.x = intersection.x + p.vx * 0.1; // 少し先にずらす
+                                p.y = intersection.y + p.vy * 0.1;
+                            }
+                            p.hitGuidelineId = g.id; // このガイドラインにヒットしたことを記録
+                            break; // 1つのガイドラインにヒットしたら、そのパーティクルに対する残りのセグメントはチェック不要
+                        }
+                    }
+                }
+
+                // 実際の移動
+                p.x += p.vx * moveAmount;
+                p.y += p.vy * moveAmount;
+
+
+                // ターゲットとの衝突判定
+                const distToTarget = Math.sqrt(Math.pow(p.x - target.x, 2) + Math.pow(p.y - target.y, 2));
+                if (distToTarget < target.radius - p.radius) { // 点がターゲットの中心に十分近づいた
+                    score++;
+                    target.hitEffectTime = currentTime; // ヒットエフェクト開始
+                    particles.splice(i, 1); // 点を配列から削除
+                    updateScoreDisplay();
+                    continue; // 次のパーティクルへ
+                }
+
+                // 画面外判定
+                // パーティクルが画面の端から完全に外に出たらミスと判定
+                if (p.x < -p.radius * 2 || p.x > gameWidth + p.radius * 2 ||
+                    p.y < -p.radius * 2 || p.y > gameHeight + p.radius * 2) {
+                    lives++;
+                    particles.splice(i, 1); // 点を配列から削除
+                    updateScoreDisplay();
+                    if (lives >= MAX_LIVES) {
+                        endGame(); // 許容ミス数を超えたらゲームオーバー
+                        return; // ゲームオーバーになったら以降の更新は不要
+                    }
+                }
+            }
+        }
+
+        // -------------------- ゲームループ --------------------
+        function gameLoop(timestamp) {
+            if (gameState !== GAME_STATE.PLAYING) return;
+
+            const deltaTime = timestamp - lastTimestamp;
+            lastTimestamp = timestamp;
+
+            update(deltaTime);
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // -------------------- タッチイベントハンドラ --------------------
+        function getTouchPos(e) {
+            const rect = canvas.getBoundingClientRect();
+            const touch = e.touches[0]; // 最初の指の情報を取得
+            return {
+                x: (touch.clientX - rect.left) / devicePixelRatio,
+                y: (touch.clientY - rect.top) / devicePixelRatio
+            };
+        }
+
+        function handleTouchStart(e) {
+            e.preventDefault(); // デフォルトのスクロールやズーム動作などを防ぐ
+            if (gameState !== GAME_STATE.PLAYING) return;
+
+            isDrawing = true;
+            const pos = getTouchPos(e);
+            currentGuideline = {
+                id: performance.now(), // ユニークなIDを付与
+                points: [{ x: pos.x, y: pos.y }],
+                creationTime: performance.now()
+            };
+            guidelines.push(currentGuideline);
+        }
+
+        function handleTouchMove(e) {
+            e.preventDefault();
+            if (!isDrawing || gameState !== GAME_STATE.PLAYING) return;
+
+            const pos = getTouchPos(e);
+            // 直前の点と十分に離れていたら新しい点を追加し、滑らかな線にする
+            const lastPoint = currentGuideline.points[currentGuideline.points.length - 1];
+            const dist = Math.sqrt(Math.pow(pos.x - lastPoint.x, 2) + Math.pow(pos.y - lastPoint.y, 2));
+            if (dist > GUIDELINE_MIN_DIST) {
+                currentGuideline.points.push({ x: pos.x, y: pos.y });
+            }
+        }
+
+        function handleTouchEnd(e) {
+            e.preventDefault();
+            if (!isDrawing || gameState !== GAME_STATE.PLAYING) return;
+
+            isDrawing = false;
+            currentGuideline = null; // ガイドラインの描画を終了
+        }
+
+        // -------------------- イベントリスナー登録 --------------------
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+        canvas.addEventListener('touchstart', handleTouchStart, { passive: false });
+        canvas.addEventListener('touchmove', handleTouchMove, { passive: false });
+        canvas.addEventListener('touchend', handleTouchEnd, { passive: false });
+        canvas.addEventListener('touchcancel', handleTouchEnd, { passive: false }); // タッチキャンセル時も終了
+
+        window.addEventListener('resize', resizeCanvas); // ウィンドウサイズ変更時にもキャンバスサイズを調整
+
+        // 初期表示と設定
+        showScreen(startScreen);
+        hideScreen(gameOverScreen);
+        hideScreen(scoreDisplay);
+        resizeCanvas(); // 初回ロード時にもキャンバスサイズを調整
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

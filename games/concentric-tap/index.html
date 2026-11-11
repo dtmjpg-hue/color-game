@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>パーフェクトサークルタップ</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh; /* 画面全体を覆う */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #282c34;
+            color: #ffffff;
+            overflow: hidden; /* スクロール防止 */
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* IE/Edge */
+            user-select: none; /* 標準 */
+            touch-action: manipulation; /* タップの遅延防止 */
+        }
+
+        #game-container {
+            width: 100%;
+            max-width: 400px; /* スマホ縦画面を想定 */
+            height: 100%; /* 親要素(body)の高さに合わせる */
+            max-height: 700px; /* PCでの表示サイズを制限 */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            text-align: center;
+            background-color: #3a3f47;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.5);
+            position: relative; /* 子要素の配置のため */
+        }
+
+        /* 画面共通スタイル */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            box-sizing: border-box;
+            background-color: #3a3f47;
+            border-radius: 10px;
+        }
+
+        h1 {
+            font-size: 1.8em;
+            margin-bottom: 20px;
+        }
+
+        p {
+            font-size: 1.1em;
+            line-height: 1.5;
+            margin-bottom: 30px;
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            background-color: #61dafb;
+            color: #282c34;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 10px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.3s ease, transform 0.1s ease;
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        /* ゲーム画面 */
+        #game-screen {
+            justify-content: flex-start; /* スコアを上部に */
+            position: relative; /* 子要素の配置のため */
+        }
+
+        #score-display {
+            font-size: 1.5em;
+            margin-top: 20px;
+            position: absolute;
+            top: 0;
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            background-color: rgba(0, 0, 0, 0.3);
+            border-radius: 5px;
+            z-index: 10;
+        }
+
+        #circles-container {
+            position: absolute; /* 親要素内で絶対配置 */
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            display: flex; /* 中央寄せのため */
+            align-items: center;
+            justify-content: center;
+        }
+
+        #target-circle, #outer-circle {
+            position: absolute;
+            border-radius: 50%;
+            box-sizing: border-box; /* paddingやborderをwidth/heightに含める */
+            transform: translate(-50%, -50%); /* 中央寄せ */
+            top: 50%;
+            left: 50%;
+        }
+
+        #target-circle {
+            width: 60px;
+            height: 60px;
+            background-color: #61dafb; /* ターゲットの色 */
+            border: 4px solid #ffffff;
+            z-index: 2; /* 外側円より手前 */
+        }
+
+        #outer-circle {
+            width: 250px; /* 初期値、JSで動的に変わる */
+            height: 250px; /* 初期値、JSで動的に変わる */
+            border: 8px solid #a2ff79; /* 外側円の色 */
+            background-color: transparent;
+            z-index: 1; /* ターゲット円より奥 */
+            transition: border-color 0.1s ease-out; /* ヒット時に色を変えるアニメーション */
+        }
+
+        #outer-circle.hit-correct {
+            border-color: #ffda61; /* ヒット時の色 */
+        }
+        #outer-circle.hit-miss {
+            border-color: #ff6161; /* ミス時の色 */
+        }
+
+        /* ゲームオーバー画面 */
+        #final-score {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #61dafb;
+        }
+
+        /* スコアのテキストが改行されないように */
+        #score-display, #final-score {
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <!-- イントロ画面 -->
+        <div id="intro-screen" class="screen">
+            <h1>パーフェクトサークルタップ</h1>
+            <p>
+                外側から縮小してくる大きな緑色の円が、<br>
+                中央の小さな青い円に<br>
+                ピッタリ重なる瞬間にタップしてください。<br>
+                3回ミスするとゲームオーバーです。
+            </p>
+            <button id="start-button">スタート</button>
+        </div>
+
+        <!-- ゲームプレイ画面 -->
+        <div id="game-screen" class="screen" style="display: none;">
+            <div id="score-display">スコア: 0</div>
+            <div id="circles-container">
+                <div id="outer-circle"></div>
+                <div id="target-circle"></div>
+            </div>
+        </div>
+
+        <!-- ゲームオーバー画面 -->
+        <div id="gameover-screen" class="screen" style="display: none;">
+            <h1>ゲーム終了！</h1>
+            <p>最終スコア: <span id="final-score">0</span></p>
+            <button id="retry-button">もう一度</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM要素の取得
+        const introScreen = document.getElementById('intro-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const gameoverScreen = document.getElementById('gameover-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const outerCircle = document.getElementById('outer-circle');
+        const targetCircle = document.getElementById('target-circle');
+        const circlesContainer = document.getElementById('circles-container');
+
+        // ゲーム定数
+        const TARGET_RADIUS = 30; // 中央の小さい円の半径 (width/heightの半分)
+        const INITIAL_OUTER_RADIUS = 125; // 外側の大きい円の初期半径
+        const SHRINK_SPEED = 0.12; // 縮小速度 (ピクセル/ミリ秒)
+        const TAP_WINDOW_THRESHOLD = 5; // 成功と判定する許容誤差 (ピクセル)
+        const ANIMATION_DURATION_MS = 100; // ヒット/ミスの視覚フィードバック表示時間
+        const MAX_MISSES = 3; // 許容されるミスの最大回数
+
+        // ゲーム状態
+        let score = 0;
+        let missCount = 0; // ミスカウンター
+        let currentOuterRadius = INITIAL_OUTER_RADIUS;
+        let lastFrameTime = 0;
+        let animationFrameId = null; // requestAnimationFrameのID
+        let isGamePlaying = false; // ゲームプレイ中かどうかのフラグ
+
+        // ターゲット円のサイズをCSSに合わせる
+        targetCircle.style.width = `${TARGET_RADIUS * 2}px`;
+        targetCircle.style.height = `${TARGET_RADIUS * 2}px`;
+
+        // 画面表示ヘルパー関数
+        function showScreen(screen) {
+            introScreen.style.display = 'none';
+            gameScreen.style.display = 'none';
+            gameoverScreen.style.display = 'none';
+            screen.style.display = 'flex';
+        }
+
+        // ゲームのリセットと開始
+        function startGame() {
+            score = 0;
+            missCount = 0; // ミスカウンターをリセット
+            updateScoreDisplay();
+            resetCircles();
+            showScreen(gameScreen);
+            lastFrameTime = performance.now();
+            if (animationFrameId) cancelAnimationFrame(animationFrameId); // 既存のアニメーションがあれば停止
+            isGamePlaying = true; // ゲーム開始
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // 円の状態をリセット
+        function resetCircles() {
+            currentOuterRadius = INITIAL_OUTER_RADIUS;
+            updateOuterCircleDisplay();
+            removeHitFeedback();
+        }
+
+        // 外側円の表示を更新
+        function updateOuterCircleDisplay() {
+            const size = currentOuterRadius * 2;
+            outerCircle.style.width = `${size}px`;
+            outerCircle.style.height = `${size}px`;
+            // 小さくなりすぎないように最小値を設定
+            if (currentOuterRadius < 0) currentOuterRadius = 0;
+        }
+
+        // ゲームループ
+        function gameLoop(currentTime) {
+            if (!isGamePlaying) {
+                // ゲームが終了したらループを停止
+                if (animationFrameId) cancelAnimationFrame(animationFrameId);
+                return;
+            }
+
+            const deltaTime = currentTime - lastFrameTime;
+            lastFrameTime = currentTime;
+
+            // 円を縮小
+            currentOuterRadius -= SHRINK_SPEED * deltaTime;
+
+            // ターゲットより小さくなったら自動的に失敗（ミス）
+            if (currentOuterRadius <= TARGET_RADIUS - TAP_WINDOW_THRESHOLD) {
+                handleMiss(); // タップせず通り過ぎた場合もミス
+                resetCircles();
+            }
+
+            updateOuterCircleDisplay();
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // タップ処理
+        function handleTap() {
+            if (!isGamePlaying) return; // ゲームプレイ中でなければ無視
+
+            const diff = Math.abs(currentOuterRadius - TARGET_RADIUS);
+
+            if (diff <= TAP_WINDOW_THRESHOLD) {
+                // 成功
+                score++;
+                updateScoreDisplay();
+                showHitFeedback('correct');
+            } else {
+                // 失敗
+                handleMiss(); // タップが外れた場合もミスとしてカウント
+            }
+            // 次のラウンドへ
+            resetCircles();
+        }
+
+        // ミス処理（タップしなかった場合や、タップが外れた場合）
+        function handleMiss() {
+            missCount++;
+            showHitFeedback('miss');
+            if (missCount >= MAX_MISSES) {
+                gameOver();
+            }
+        }
+
+        // スコア表示の更新
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = `スコア: ${score} (ミス: ${missCount}/${MAX_MISSES})`;
+        }
+
+        // ゲームオーバー処理
+        function gameOver() {
+            isGamePlaying = false; // ゲーム終了
+            if (animationFrameId) cancelAnimationFrame(animationFrameId); // ループ停止
+            finalScoreDisplay.textContent = score;
+            showScreen(gameoverScreen);
+        }
+
+        // ヒット/ミスの視覚フィードバック
+        let feedbackTimeoutId = null;
+        function showHitFeedback(type) {
+            // 以前のフィードバックアニメーションをクリア
+            if (feedbackTimeoutId) {
+                clearTimeout(feedbackTimeoutId);
+                removeHitFeedback();
+            }
+
+            if (type === 'correct') {
+                outerCircle.classList.add('hit-correct');
+            } else if (type === 'miss') {
+                outerCircle.classList.add('hit-miss');
+            }
+
+            feedbackTimeoutId = setTimeout(() => {
+                removeHitFeedback();
+                feedbackTimeoutId = null;
+            }, ANIMATION_DURATION_MS);
+        }
+
+        function removeHitFeedback() {
+            outerCircle.classList.remove('hit-correct', 'hit-miss');
+        }
+
+        // イベントリスナーの設定
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+        // circlesContainer全体をタップ領域とする
+        // 'touchstart'はモバイルでの反応が速い
+        circlesContainer.addEventListener('touchstart', handleTap, { passive: false });
+        // デバッグ用にPCでもクリックでテストできるように
+        circlesContainer.addEventListener('click', handleTap); 
+
+
+        // 初期表示
+        showScreen(introScreen);
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>色彩一致チャレンジ</title>
+<style>
+  /* 全体のリセットと共通スタイル (お手本をベースに調整) */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e2a44; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* HUD (ヘッドアップディスプレイ) */
+  #hud { padding: 12px 16px 8px; background: #16203a; }
+  #stats { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; }
+  
+  /* ゲーム固有のHUD要素: 常に表示される指示と目標色 */
+  #instruction { margin-top: 8px; padding: 10px; text-align: center; background: #556c9d; color: #fff;
+    border-radius: 12px; font-size: 20px; font-weight: bold; display: flex; align-items: center; justify-content: center; }
+  #targetColorBox { width: 30px; height: 30px; border: 2px solid rgba(255,255,255,0.6); border-radius: 6px; margin-left: 10px; flex-shrink: 0; }
+
+  /* ゲームプレイフィールド */
+  #field { position: relative; flex: 1; overflow: hidden; background-color: #000; cursor: pointer; }
+
+  /* フィードバック表示 */
+  .fb { position: absolute; font-size: 26px; font-weight: bold; pointer-events: none; animation: rise .8s ease-out forwards; text-shadow: 0 0 8px rgba(0,0,0,0.5); white-space: pre-wrap; text-align: center;}
+  .fb.perfect { color: #8affc2; } /* 緑 */
+  .fb.excellent { color: #c2ff8a; } /* 黄緑 */
+  .fb.good { color: #ffd54a; }   /* 黄色 */
+  .fb.ok { color: #ffab7d; }      /* オレンジ */
+  .fb.bad { color: #ff7d7d; }     /* 赤 */
+  @keyframes rise { to { transform: translateY(-40px); opacity: 0; } }
+
+  /* オーバーレイ (開始/終了画面) */
+  #overlay { position: absolute; inset: 0; background: rgba(10,16,32,.94); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 16px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  #overlay .big { font-size: 42px; font-weight: bold; color: #ffd54a; margin: 8px 0; }
+  button { margin-top: 24px; padding: 16px 40px; font-size: 22px; font-weight: bold; color: #3a2a00;
+    background: #ffd54a; border: none; border-radius: 14px; cursor: pointer; }
+  button:active { transform: scale(.96); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>のこり <span id="time">45</span>秒</span>
+    </div>
+    <div id="instruction">
+      <span>目標色にタップ！</span>
+      <div id="targetColorBox"></div>
+    </div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">色彩一致チャレンジ</h1>
+    <div id="ovBody">
+      <p>画面全体の微妙な色の変化を注意深く観察し、</p>
+      <p>上の枠の<b>目標色に完全に一致した</b>と<br>判断した瞬間にタップしよう！</p>
+      <p>制限時間は45秒。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ゲーム定数
+  var GAME_SECONDS = 45; // 制限時間（秒）
+  var DEVIATE_AFTER_FRAMES = 30; // 完璧一致がこのフレーム数続いたら、色を少しずらす
+
+  // DOM要素の参照
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var timeEl = document.getElementById("time");
+  var targetColorBox = document.getElementById("targetColorBox");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲーム状態変数
+  var score = 0;
+  var timeLeft = 0;
+  var running = false;
+  var targetColor = { r: 0, g: 0, b: 0 }; // 目標色
+  var currentColor = { r: 0, g: 0, b: 0 }; // 現在の画面色
+  var animationFrameId = null; // requestAnimationFrameのID
+  var clockInterval = null; // setIntervalのID
+  var perfectMatchFrameCounter = 0; // 完璧一致が続いているフレーム数
+
+  // ローカルストレージからのベストスコア読み書き
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("colorMatch_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("colorMatch_best", String(v)); } catch (e) {}
+  }
+
+  // スコアの更新
+  function setScore(v) {
+    score = v;
+    scoreEl.textContent = String(score);
+  }
+
+  // RGB値をCSSのrgb()形式に変換
+  function rgbToCss(r, g, b) {
+    return 'rgb(' + Math.round(r) + ',' + Math.round(g) + ',' + Math.round(b) + ')';
+  }
+
+  // 2つの色のRGB合計差を計算
+  function getDiff(c1, c2) {
+    return Math.abs(c1.r - c2.r) + Math.abs(c1.g - c2.g) + Math.abs(c1.b - c2.b);
+  }
+
+  // フィードバック表示 (お手本から流用)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 750); // アニメーション時間に合わせて調整
+  }
+
+  // ランダムな色コンポーネント (0-255) を生成
+  function randomColorComponent() {
+      // 極端な暗色や明色を避けるため、ある程度の範囲で生成
+      return Math.floor(Math.random() * 150) + 50; // 50-199の範囲
+  }
+
+  // 色変化のロジック (requestAnimationFrameで呼び出される)
+  function updateColor() {
+    if (!running) {
+      cancelAnimationFrame(animationFrameId);
+      return;
+    }
+
+    var allMatched = true;
+    var maxColorChangeStep = 1.5; // 色が変化する最大のステップ幅
+
+    ['r', 'g', 'b'].forEach(function(c) {
+        if (currentColor[c] === targetColor[c]) {
+            // Perfect match for this component, do nothing
+        } else {
+            allMatched = false;
+            var diff = targetColor[c] - currentColor[c];
+            // 差が大きいほど速く、最小でも0.5のステップで変化
+            var step = Math.sign(diff) * Math.max(0.5, Math.abs(diff) / 15);
+            // 最大ステップ幅を制限
+            step = Math.min(Math.abs(step), maxColorChangeStep) * Math.sign(step);
+
+            currentColor[c] += step;
+
+            // 目標値を超えた場合は目標値に設定
+            if ((diff > 0 && currentColor[c] > targetColor[c]) || (diff < 0 && currentColor[c] < targetColor[c])) {
+                currentColor[c] = targetColor[c];
+            }
+            currentColor[c] = Math.max(0, Math.min(255, currentColor[c])); // 0-255にクランプ
+        }
+    });
+
+    if (allMatched) {
+        perfectMatchFrameCounter++;
+        if (perfectMatchFrameCounter >= DEVIATE_AFTER_FRAMES) {
+            // 完璧一致が一定フレーム続いたら、色を少しずらして再度プレイヤーに完璧な瞬間を探させる
+            ['r', 'g', 'b'].forEach(function(c) {
+                currentColor[c] = Math.max(0, Math.min(255, targetColor[c] + Math.floor(Math.random() * 11) - 5)); // ±5の範囲でずらす
+            });
+            perfectMatchFrameCounter = 0; // カウンターをリセット
+        }
+    } else {
+        perfectMatchFrameCounter = 0; // 一致していなければカウンターをリセット
+    }
+
+    field.style.backgroundColor = rgbToCss(currentColor.r, currentColor.g, currentColor.b);
+    animationFrameId = requestAnimationFrame(updateColor);
+  }
+
+  // フィールドタップ時の処理
+  function handleTap(event) {
+    if (!running) return;
+    event.preventDefault(); // デフォルトの動作 (拡大など) を防ぐ
+
+    var totalDiff = getDiff(currentColor, targetColor);
+    var points = 0;
+    var feedbackText = "";
+    var feedbackClass = "";
+
+    // 色の差に応じてスコアとフィードバックを決定
+    if (totalDiff === 0) {
+        points = 200;
+        feedbackText = "PERFECT!";
+        feedbackClass = "perfect";
+    } else if (totalDiff <= 15) { // RGB各成分が平均5程度ずれている
+        points = 80;
+        feedbackText = "EXCELLENT!";
+        feedbackClass = "excellent";
+    } else if (totalDiff <= 40) { // RGB各成分が平均13程度ずれている
+        points = 50;
+        feedbackText = "GOOD!";
+        feedbackClass = "good";
+    } else if (totalDiff <= 100) { // RGB各成分が平均33程度ずれている
+        points = 20;
+        feedbackText = "OK!";
+        feedbackClass = "ok";
+    } else {
+        points = 0;
+        feedbackText = "MISSED";
+        feedbackClass = "bad";
+    }
+
+    setScore(score + points);
+    // タップ位置にフィードバックを表示
+    feedback(event.clientX, event.clientY, (points > 0 ? "+" : "") + points + "点\n" + feedbackText, feedbackClass);
+
+    // タップ後に現在の色を少しずらして、再度完璧な瞬間を探させる
+    ['r', 'g', 'b'].forEach(function(c) {
+        currentColor[c] = Math.max(0, Math.min(255, targetColor[c] + Math.floor(Math.random() * 21) - 10)); // ±10の範囲でずらす
+    });
+    perfectMatchFrameCounter = 0; // カウンターをリセット
+  }
+
+  // 1秒ごとのタイマー処理
+  function tick() {
+    timeLeft -= 1;
+    timeEl.textContent = String(Math.max(0, timeLeft));
+    if (timeLeft <= 0) {
+      endGame();
+    }
+  }
+
+  // ゲーム開始処理
+  function startGame() {
+    setScore(0);
+    timeLeft = GAME_SECONDS;
+    timeEl.textContent = String(timeLeft);
+
+    // 目標色をランダムに設定
+    targetColor = {
+        r: randomColorComponent(),
+        g: randomColorComponent(),
+        b: randomColorComponent()
+    };
+    targetColorBox.style.backgroundColor = rgbToCss(targetColor.r, targetColor.g, targetColor.b);
+
+    // 現在の画面色を目標色から十分に離れたランダムな色で初期化
+    currentColor = {
+        r: Math.max(0, Math.min(255, targetColor.r + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
+        g: Math.max(0, Math.min(255, targetColor.g + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
+        b: Math.max(0, Math.min(255, targetColor.b + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100)))
+    };
+    field.style.backgroundColor = rgbToCss(currentColor.r, currentColor.g, currentColor.b);
+    
+    perfectMatchFrameCounter = 0; // カウンターをリセット
+    overlay.style.display = "none";
+    running = true;
+
+    // 既存のアニメーションやタイマーをクリア
+    cancelAnimationFrame(animationFrameId);
+    clearInterval(clockInterval);
+
+    // 新しいゲームループを開始
+    animationFrameId = requestAnimationFrame(updateColor);
+    clockInterval = setInterval(tick, 1000);
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false;
+    cancelAnimationFrame(animationFrameId);
+    clearInterval(clockInterval);
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+
+    ovTitle.textContent = "タイムアップ!";
+    ovBody.innerHTML =
+      '<p>あなたのスコア</p><div class="big">' + score + '点</div>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? "(新記録!)" : "") + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  // イベントリスナー登録
+  startBtn.addEventListener("click", startGame);
+  field.addEventListener("pointerdown", handleTap); // スマホでのタップを考慮
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

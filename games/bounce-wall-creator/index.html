@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>ボール誘導ゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #222;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none; /* Standard */
+            touch-action: manipulation; /* ブラウザのデフォルトのタッチ操作（スクロール、ズームなど）を抑制 */
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            max-width: 450px; /* スマートフォンの一般的な縦幅に合わせる */
+            height: calc(100vh - 20px); /* 少し小さめにして、システムバーなどを考慮 */
+            max-height: 800px; /* スマートフォンの一般的な縦幅に合わせる */
+            background-color: #fff;
+            border: 2px solid #555;
+            box-shadow: 0 0 15px rgba(0, 0, 0, 0.5);
+            overflow: hidden; /* ボールがはみ出ないように */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        canvas {
+            display: block;
+            background-color: #f0f0f0;
+            border-bottom: 1px solid #ddd;
+            flex-grow: 1; /* 残りのスペースを埋める */
+        }
+
+        #scoreDisplay {
+            width: 100%;
+            padding: 10px 0;
+            text-align: center;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #333;
+            background-color: #ddd;
+            box-sizing: border-box;
+        }
+
+        .overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.7);
+            color: white;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 20px;
+            box-sizing: border-box;
+            z-index: 10;
+        }
+
+        .overlay h2 {
+            margin-bottom: 20px;
+            font-size: 2em;
+        }
+
+        .overlay p {
+            margin-bottom: 30px;
+            line-height: 1.5;
+            font-size: 1.1em;
+        }
+
+        .button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: bold;
+            color: white;
+            background-color: #4CAF50;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            transition: background-color 0.3s ease, transform 0.1s ease;
+        }
+
+        .button:hover {
+            background-color: #45a049;
+        }
+
+        .button:active {
+            transform: translateY(2px);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas"></canvas>
+        <div id="scoreDisplay">スコア: 0</div>
+
+        <div id="introScreen" class="overlay">
+            <h2>ボール誘導ゲーム</h2>
+            <p>
+                画面内を跳ね回るボールをタップで一時的な壁を生成して誘導し、<br>
+                緑色の目標ゾーンに入れたら得点です。<br>
+                目指せハイスコア！
+            </p>
+            <button id="startButton" class="button">ゲームスタート</button>
+        </div>
+
+        <div id="gameOverScreen" class="overlay" style="display: none;">
+            <h2>ゲームオーバー</h2>
+            <p>最終スコア: <span id="finalScore">0</span></p>
+            <button id="retryButton" class="button">もう一度</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        const introScreen = document.getElementById('introScreen');
+        const startButton = document.getElementById('startButton');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const finalScoreSpan = document.getElementById('finalScore');
+        const retryButton = document.getElementById('retryButton');
+
+        let gameState = 'intro'; // 'intro', 'playing', 'gameOver'
+
+        // ゲーム変数
+        let ball = {
+            x: 0,
+            y: 0,
+            radius: 15,
+            vx: 0,
+            vy: 0,
+            speed: 3
+        };
+        let walls = []; // { x1, y1, x2, y2, life }
+        let targetZone = {
+            x: 0,
+            y: 0,
+            width: 80,
+            height: 80
+        };
+        let score = 0;
+        let animationFrameId;
+        const WALL_LIFETIME = 120; // フレーム数 (約2秒 @60fps)
+        const WALL_LENGTH = 70; // 壁の長さ
+        const WALL_THICKNESS = 8; // 壁の厚み (描画および衝突判定用)
+
+        // canvasサイズ調整
+        function resizeCanvas() {
+            const gameContainer = document.getElementById('gameContainer');
+            canvas.width = gameContainer.clientWidth;
+            // canvasの高さはscoreDisplayの高さ分を引いたもの
+            canvas.height = gameContainer.clientHeight - scoreDisplay.offsetHeight;
+            
+            // ボールの位置が画面外に出ていたら調整
+            if (ball.x < ball.radius) ball.x = ball.radius;
+            if (ball.x > canvas.width - ball.radius) ball.x = canvas.width - ball.radius;
+            if (ball.y < ball.radius) ball.y = ball.radius;
+            if (ball.y > canvas.height - ball.radius) ball.y = canvas.height - ball.radius;
+
+            // リサイズ時に描画を更新
+            if (gameState === 'intro' || gameState === 'playing') {
+                draw();
+            }
+        }
+        window.addEventListener('resize', resizeCanvas);
+
+
+        // ゲームの初期化
+        function initGame() {
+            score = 0;
+            scoreDisplay.textContent = `スコア: ${score}`;
+            walls = [];
+            ball.speed = 3;
+
+            // ボールの初期位置と速度を設定
+            initBallPositionAndVelocity();
+            
+            // 目標ゾーンの位置を設定 (ボールと重ならないように)
+            setTargetZonePosition();
+
+            // UIの表示/非表示
+            introScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            scoreDisplay.style.display = 'block';
+        }
+
+        // ボールを初期位置と速度にリセットするヘルパー関数
+        function initBallPositionAndVelocity() {
+            // 画面の中央付近にボールを配置
+            ball.x = canvas.width / 2;
+            ball.y = canvas.height / 2;
+            
+            // ボールの初期速度をランダムに設定
+            let angle = Math.random() * Math.PI * 2;
+            ball.vx = Math.cos(angle) * ball.speed;
+            ball.vy = Math.sin(angle) * ball.speed;
+        }
+
+        // 目標ゾーンの位置を設定
+        function setTargetZonePosition() {
+            const minDistance = ball.radius * 4; // ボールと目標ゾーンが近くならないように
+            let collision = true;
+            while(collision) {
+                targetZone.x = Math.random() * (canvas.width - targetZone.width);
+                targetZone.y = Math.random() * (canvas.height - targetZone.height);
+
+                // ボールと目標ゾーンが重ならないかチェック
+                const targetCenterX = targetZone.x + targetZone.width / 2;
+                const targetCenterY = targetZone.y + targetZone.height / 2;
+                const dx = Math.abs(ball.x - targetCenterX);
+                const dy = Math.abs(ball.y - targetCenterY);
+                const dist = Math.sqrt(dx * dx + dy * dy);
+
+                if (dist > minDistance) {
+                    collision = false;
+                }
+            }
+        }
+
+
+        // ゲームループ
+        function gameLoop() {
+            if (gameState !== 'playing') {
+                cancelAnimationFrame(animationFrameId);
+                return;
+            }
+
+            update();
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // ゲーム状態の更新
+        function update() {
+            // ボールの移動
+            ball.x += ball.vx;
+            ball.y += ball.vy;
+
+            // 画面端との衝突
+            if (ball.x + ball.radius > canvas.width) {
+                ball.vx *= -1;
+                ball.x = canvas.width - ball.radius; // 画面外に出ないように調整
+            } else if (ball.x - ball.radius < 0) {
+                ball.vx *= -1;
+                ball.x = ball.radius; // 画面外に出ないように調整
+            }
+            if (ball.y + ball.radius > canvas.height) {
+                ball.vy *= -1;
+                ball.y = canvas.height - ball.radius; // 画面外に出ないように調整
+            } else if (ball.y - ball.radius < 0) {
+                ball.vy *= -1;
+                ball.y = ball.radius; // 画面外に出ないように調整
+            }
+
+            // 壁の寿命を減らす
+            walls = walls.filter(wall => {
+                wall.life--;
+                return wall.life > 0;
+            });
+
+            // ボールと壁の衝突判定 (生成される壁は水平線分のみ)
+            walls.forEach(wall => {
+                const wallHalfThickness = WALL_THICKNESS / 2;
+
+                // ボールが壁のX軸範囲内にあるか
+                if (ball.x + ball.radius > wall.x1 && ball.x - ball.radius < wall.x2) {
+                    // ボールと壁の上下の衝突
+                    // ボールが壁の上下の境界に触れているか
+                    if (ball.y + ball.radius > wall.y1 - wallHalfThickness && ball.y - ball.radius < wall.y1 + wallHalfThickness) {
+                        // 衝突しているが、すでにめり込んでいる場合は再衝突を防ぐ
+                        // 前のフレームでのボールの位置から、どちらから衝突したかを判定
+                        const prevBallY = ball.y - ball.vy;
+                        
+                        // 壁の上側に衝突 (ボールが上から来て壁に当たった)
+                        if (prevBallY - ball.radius >= wall.y1 + wallHalfThickness && ball.vy < 0) {
+                            ball.vy *= -1;
+                            ball.y = wall.y1 + wallHalfThickness + ball.radius; // 壁の外側に押し出す
+                        } 
+                        // 壁の下側に衝突 (ボールが下から来て壁に当たった)
+                        else if (prevBallY + ball.radius <= wall.y1 - wallHalfThickness && ball.vy > 0) {
+                            ball.vy *= -1;
+                            ball.y = wall.y1 - wallHalfThickness - ball.radius; // 壁の外側に押し出す
+                        }
+                    }
+                }
+            });
+
+
+            // ボールと目標ゾーンの衝突判定 (矩形と円の衝突)
+            const closestX = Math.max(targetZone.x, Math.min(ball.x, targetZone.x + targetZone.width));
+            const closestY = Math.max(targetZone.y, Math.min(ball.y, targetZone.y + targetZone.height));
+            const distanceX = ball.x - closestX;
+            const distanceY = ball.y - closestY;
+            const distanceSq = (distanceX * distanceX) + (distanceY * distanceY);
+
+            if (distanceSq < (ball.radius * ball.radius)) {
+                score++;
+                scoreDisplay.textContent = `スコア: ${score}`;
+                
+                // ボールの速度を少し上げる
+                ball.speed += 0.5;
+                // ボールをリセット
+                initBallPositionAndVelocity();
+                setTargetZonePosition(); // 目標ゾーンも移動
+            }
+        }
+
+        // 描画処理
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // キャンバスをクリア
+
+            // 目標ゾーンを描画
+            ctx.fillStyle = 'rgba(0, 150, 0, 0.8)'; // 目立つ緑色
+            ctx.fillRect(targetZone.x, targetZone.y, targetZone.width, targetZone.height);
+            ctx.strokeStyle = 'rgba(0, 100, 0, 1)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(targetZone.x, targetZone.y, targetZone.width, targetZone.height);
+
+
+            // 壁を描画
+            walls.forEach(wall => {
+                const alpha = wall.life / WALL_LIFETIME; // 残り寿命に応じて透明度を変更
+                ctx.strokeStyle = `rgba(100, 100, 100, ${alpha})`;
+                ctx.lineWidth = WALL_THICKNESS;
+                ctx.lineCap = 'round';
+                ctx.beginPath();
+                ctx.moveTo(wall.x1, wall.y1);
+                ctx.lineTo(wall.x2, wall.y2);
+                ctx.stroke();
+            });
+
+            // ボールを描画
+            ctx.beginPath();
+            ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+            ctx.strokeStyle = 'darkred';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+        }
+
+        // タップイベントハンドラ
+        function handleTap(event) {
+            if (gameState !== 'playing') return;
+
+            // event.preventDefault(); // デフォルトのスクロールなどを防ぐ (CSSでtouch-action: manipulation;を設定しているため不要)
+
+            const rect = canvas.getBoundingClientRect();
+            let touchX, touchY;
+
+            if (event.touches) { // タッチイベントの場合 (event.touchesはTouchList)
+                touchX = event.touches[0].clientX - rect.left;
+                touchY = event.touches[0].clientY - rect.top;
+            } else { // マウスイベント (pointerdown) の場合
+                touchX = event.clientX - rect.left;
+                touchY = event.clientY - rect.top;
+            }
+            
+            // タップ位置を中心に水平な短い壁を生成
+            const halfWall = WALL_LENGTH / 2;
+            walls.push({
+                x1: touchX - halfWall,
+                y1: touchY,
+                x2: touchX + halfWall,
+                y2: touchY,
+                life: WALL_LIFETIME
+            });
+        }
+
+        // ゲームスタート
+        function startGame() {
+            gameState = 'playing';
+            initGame();
+            resizeCanvas(); // ゲーム開始前にcanvasサイズを調整
+            gameLoop();
+        }
+
+        // イベントリスナー
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+        canvas.addEventListener('pointerdown', handleTap); // マウスとタッチの両方に対応
+
+        // 初期表示
+        resizeCanvas();
+        draw(); // イントロ画面でも一度描画しておく
+        introScreen.style.display = 'flex';
+        gameOverScreen.style.display = 'none';
+        scoreDisplay.style.display = 'none'; // ゲーム開始までは非表示
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

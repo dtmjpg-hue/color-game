@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>左右連結タップ</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, maximum-scale=1">
+    <style>
+        /* 全体設定 */
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: white;
+            background-color: #1a1a1a;
+            user-select: none; /* テキスト選択を無効化 */
+            -webkit-user-select: none; /* Safari用 */
+            -moz-user-select: none; /* Firefox用 */
+            -ms-user-select: none; /* IE/Edge用 */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        /* ゲームコンテナ */
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        /* スクリーン共通スタイル */
+        .game-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(0, 0, 0, 0.9);
+            text-align: center;
+            z-index: 100;
+        }
+
+        .game-screen h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+        }
+
+        .game-screen p {
+            font-size: 1.1em;
+            margin: 5px 20px;
+            line-height: 1.5;
+        }
+
+        .game-screen button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            margin-top: 30px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.3s ease;
+        }
+
+        .game-screen button:active {
+            background-color: #45a049;
+            transform: translateY(1px);
+        }
+
+        /* ゲームUI */
+        #game-ui {
+            width: 100%;
+            height: 100%;
+            position: relative;
+        }
+
+        #score-display {
+            position: absolute;
+            top: 15px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 1.8em;
+            font-weight: bold;
+            z-index: 50;
+            background-color: rgba(0, 0, 0, 0.4);
+            padding: 5px 15px;
+            border-radius: 5px;
+        }
+
+        #panes-wrapper {
+            display: flex;
+            width: 100%;
+            height: 100%;
+        }
+
+        .game-pane {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+            background-color: #222;
+            border-right: 1px solid #333; /* 左右の区切り線 */
+        }
+
+        #right-pane {
+            border-right: none;
+        }
+
+        /* ライフバー */
+        .life-bar {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            height: 15px; /* ライフバーの高さ */
+            width: 100%;
+            background-color: #4CAF50; /* 初期は緑 */
+            transition: width 0.1s linear, background-color 0.1s linear;
+            box-shadow: 0 -2px 5px rgba(0, 0, 0, 0.3);
+        }
+
+        /* ターゲット */
+        .target {
+            position: absolute;
+            border-radius: 50%;
+            background-color: #ffffff; /* タップ対象が分かりやすいように白 */
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.8); /* 輝くような効果 */
+            cursor: pointer;
+            z-index: 20;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0; /* 数字などを表示しない */
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <!-- 開始画面 -->
+        <div id="start-screen" class="game-screen">
+            <h1>左右連結タップ</h1>
+            <p>左右にそれぞれ出現するターゲットをタップしましょう。</p>
+            <p>両方のライフゲージを保つのが目的です。</p>
+            <p>片方をタップすると、もう片方のライフが減りやすくなるので注意！</p>
+            <button id="start-button">スタート</button>
+        </div>
+
+        <!-- ゲームUI -->
+        <div id="game-ui" style="display: none;">
+            <div id="score-display">スコア: <span id="score">0</span></div>
+            <div id="panes-wrapper">
+                <div id="left-pane" class="game-pane">
+                    <div id="left-life" class="life-bar"></div>
+                </div>
+                <div id="right-pane" class="game-pane">
+                    <div id="right-life" class="life-bar"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ゲームオーバー画面 -->
+        <div id="game-over-screen" class="game-screen" style="display: none;">
+            <h1>ゲームオーバー</h1>
+            <p>スコア: <span id="final-score">0</span></p>
+            <button id="retry-button">もう一度</button>
+        </div>
+    </div>
+
+    <script>
+        // ゲーム定数
+        const MAX_LIFE = 100;
+        const INITIAL_LIFE_DRAIN_RATE = 0.5; // 100msあたり0.5ライフ減少 = 1秒あたり5ライフ減少
+        const IMPACT_LIFE_DRAIN_MULTIPLIER = 3; // 影響時のライフ減少速度の倍率
+        const IMPACT_DURATION_MS = 1000; // 影響が続く時間 (1秒)
+        const LIFE_DRAIN_INTERVAL_MS = 100; // ライフ減少を更新する間隔
+        const TAP_RECOVER_LIFE = 20; // 1タップで回復するライフ量
+        const TARGET_SIZE = 60; // ターゲットのサイズ (px)
+        const LIFE_BAR_HEIGHT = 15; // ライフバーの高さ (px)
+
+        // ゲームの状態
+        let score = 0;
+        let isGameOver = false;
+        let life = {
+            left: MAX_LIFE,
+            right: MAX_LIFE
+        };
+        let lifeDrainIntervals = {
+            left: null,
+            right: null
+        };
+        let impactTimers = {
+            left: null,
+            right: null
+        };
+        let currentTargets = {
+            left: null,
+            right: null
+        };
+
+        // DOM要素
+        const startScreen = document.getElementById('start-screen');
+        const gameUi = document.getElementById('game-ui');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const scoreDisplay = document.getElementById('score');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const leftPane = document.getElementById('left-pane');
+        const rightPane = document.getElementById('right-pane');
+        const leftLifeBar = document.getElementById('left-life');
+        const rightLifeBar = document.getElementById('right-life');
+
+        // --- ゲームロジック ---
+
+        /** ゲームの初期化 */
+        function initGame() {
+            score = 0;
+            isGameOver = false;
+            life.left = MAX_LIFE;
+            life.right = MAX_LIFE;
+            scoreDisplay.textContent = score;
+
+            // 既存のターゲットを削除
+            if (currentTargets.left) currentTargets.left.remove();
+            if (currentTargets.right) currentTargets.right.remove();
+            currentTargets.left = null;
+            currentTargets.right = null;
+
+            // 既存のインターバルとタイマーをクリア
+            clearInterval(lifeDrainIntervals.left);
+            clearInterval(lifeDrainIntervals.right);
+            clearTimeout(impactTimers.left);
+            clearTimeout(impactTimers.right);
+
+            // ライフバーを更新
+            updateLifeBar('left');
+            updateLifeBar('right');
+
+            // 画面表示を切り替え
+            startScreen.style.display = 'flex';
+            gameUi.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+        }
+
+        /** ゲーム開始 */
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameUi.style.display = 'block';
+
+            createTarget('left');
+            createTarget('right');
+            startLifeDrain('left');
+            startLifeDrain('right');
+        }
+
+        /** ゲーム終了 */
+        function endGame() {
+            if (isGameOver) return; // 複数回呼ばれるのを防ぐ
+            isGameOver = true;
+
+            // ライフ減少インターバルを停止
+            clearInterval(lifeDrainIntervals.left);
+            clearInterval(lifeDrainIntervals.right);
+            // 影響タイマーを停止
+            clearTimeout(impactTimers.left);
+            clearTimeout(impactTimers.right);
+
+            // ターゲットを削除
+            if (currentTargets.left) currentTargets.left.remove();
+            if (currentTargets.right) currentTargets.right.remove();
+
+            finalScoreDisplay.textContent = score;
+            gameUi.style.display = 'none';
+            gameOverScreen.style.display = 'flex';
+        }
+
+        /** ライフの増減を処理 */
+        function updateLife(paneId, amount) {
+            if (isGameOver) return;
+
+            life[paneId] += amount;
+            if (life[paneId] > MAX_LIFE) {
+                life[paneId] = MAX_LIFE;
+            } else if (life[paneId] <= 0) {
+                life[paneId] = 0;
+                endGame();
+            }
+            updateLifeBar(paneId);
+        }
+
+        /** ライフバーの表示を更新 */
+        function updateLifeBar(paneId) {
+            const lifeBar = paneId === 'left' ? leftLifeBar : rightLifeBar;
+            lifeBar.style.width = (life[paneId] / MAX_LIFE * 100) + '%';
+            // ライフの割合に応じて色を緑(120)から赤(0)へ変化
+            const hue = (life[paneId] / MAX_LIFE) * 120;
+            lifeBar.style.backgroundColor = `hsl(${hue}, 100%, 50%)`;
+        }
+
+        /** ライフの自動減少を開始/更新 */
+        function startLifeDrain(paneId) {
+            clearInterval(lifeDrainIntervals[paneId]); // 既存のインターバルをクリア
+            lifeDrainIntervals[paneId] = setInterval(() => {
+                let drainRate = INITIAL_LIFE_DRAIN_RATE;
+                // 影響がアクティブな場合は減少速度を加速
+                if (impactTimers[paneId] !== null) {
+                    drainRate *= IMPACT_LIFE_DRAIN_MULTIPLIER;
+                }
+                updateLife(paneId, -drainRate);
+            }, LIFE_DRAIN_INTERVAL_MS);
+        }
+
+        /** もう片方のライフ減少に影響を与える */
+        function applyImpact(impactedPaneId) {
+            clearTimeout(impactTimers[impactedPaneId]); // 既存のタイマーをクリア
+
+            // ライフ減少を再開し、一時的に加速
+            startLifeDrain(impactedPaneId);
+
+            // 一定時間後に減少速度を元に戻すタイマーを設定
+            impactTimers[impactedPaneId] = setTimeout(() => {
+                impactTimers[impactedPaneId] = null; // タイマー参照をクリア
+                startLifeDrain(impactedPaneId); // 減少速度を初期値に戻す
+            }, IMPACT_DURATION_MS);
+        }
+
+        /** ターゲットを生成 */
+        function createTarget(paneId) {
+            if (isGameOver) return;
+
+            const paneElement = paneId === 'left' ? leftPane : rightPane;
+            const target = document.createElement('div');
+            target.classList.add('target');
+            target.style.width = `${TARGET_SIZE}px`;
+            target.style.height = `${TARGET_SIZE}px`;
+
+            const paneWidth = paneElement.clientWidth;
+            const paneHeight = paneElement.clientHeight;
+
+            // ターゲットがライフバーと重ならないようにY座標を調整
+            const randomX = Math.random() * (paneWidth - TARGET_SIZE);
+            const randomY = Math.random() * (paneHeight - TARGET_SIZE - LIFE_BAR_HEIGHT - 10); // 10pxはマージン
+            
+            target.style.left = `${randomX}px`;
+            target.style.top = `${randomY}px`;
+
+            target.dataset.paneId = paneId; // タップイベントのためにpaneIdを保存
+            target.addEventListener('click', handleTargetTap); // タップイベントリスナー
+
+            paneElement.appendChild(target);
+            currentTargets[paneId] = target;
+        }
+
+        /** ターゲットタップ時の処理 */
+        function handleTargetTap(event) {
+            if (isGameOver) return;
+
+            const target = event.target;
+            const paneId = target.dataset.paneId;
+            const otherPaneId = paneId === 'left' ? 'right' : 'left';
+
+            score++;
+            scoreDisplay.textContent = score;
+
+            updateLife(paneId, TAP_RECOVER_LIFE); // ライフ回復
+
+            target.remove(); // タップされたターゲットを削除
+            currentTargets[paneId] = null;
+            createTarget(paneId); // 新しいターゲットを生成
+
+            applyImpact(otherPaneId); // もう片方に影響を与える
+
+            event.stopPropagation(); // パネルへのイベント伝播を防ぐ
+        }
+
+        // --- イベントリスナー ---
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', initGame);
+
+        // DOMContentLoadedでゲームを初期化
+        document.addEventListener('DOMContentLoaded', initGame);
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

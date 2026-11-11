@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>点々バウンド</title>
+    <style>
+        /* 全体のリセットとスマホ向け設定 */
+        body {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            width: 100vw;
+            overflow: hidden; /* スクロール防止 */
+            background-color: #222;
+            color: #eee;
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        /* ゲームコンテナ */
+        #game-screen {
+            position: relative;
+            width: 95vw; /* 画面幅の95% */
+            height: 80vh; /* 画面高の80% */
+            max-width: 400px; /* PCでの表示サイズ上限 */
+            max-height: 700px;
+            border: 5px solid #fff;
+            background-color: #333;
+            overflow: hidden;
+            display: none; /* 初期は非表示 */
+            cursor: pointer;
+            touch-action: none; /* スマホでタップ時にページスクロールなどを防止 */
+            user-select: none; /* テキスト選択防止 */
+        }
+
+        /* スコア表示 */
+        #score-display {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            font-size: 1.5em;
+            font-weight: bold;
+            color: #fff;
+            z-index: 100;
+        }
+
+        /* 動く点 */
+        #dot {
+            position: absolute;
+            border-radius: 50%;
+            background-color: red; /* タップ対象であることを明示 */
+            box-shadow: 0 0 10px rgba(255, 255, 255, 0.7);
+            transition: background-color 0.1s ease-out; /* 色変化を滑らかに */
+            will-change: transform; /* アニメーションのパフォーマンス改善 */
+        }
+
+        /* UIスクリーン (導入、ゲームオーバー) */
+        .ui-screen {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            padding: 20px;
+            background-color: rgba(0, 0, 0, 0.8);
+            border-radius: 10px;
+            box-shadow: 0 0 15px rgba(255, 255, 255, 0.5);
+            max-width: 80vw;
+            width: 300px;
+        }
+        .ui-screen h1 {
+            font-size: 2em;
+            margin-bottom: 20px;
+            color: #fff;
+        }
+        .ui-screen p {
+            font-size: 1.1em;
+            margin-bottom: 20px;
+            line-height: 1.5;
+            color: #ccc;
+        }
+        .ui-screen button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            font-weight: bold;
+            cursor: pointer;
+            background-color: #007bff;
+            color: #fff;
+            border: none;
+            border-radius: 8px;
+            transition: background-color 0.2s ease;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.2);
+        }
+        .ui-screen button:hover {
+            background-color: #0056b3;
+        }
+        #final-score {
+            font-size: 2.5em;
+            font-weight: bold;
+            color: #f8f810;
+            margin-top: 10px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <!-- イントロ画面 -->
+    <div id="intro-screen" class="ui-screen">
+        <h1>点々バウンド</h1>
+        <p>画面内を動き回る赤い点が壁に近づいた瞬間にタップして跳ね返しましょう！<br>タップが遅れるとゲームオーバー！</p>
+        <button id="start-button">スタート</button>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen">
+        <div id="score-display">スコア: 0</div>
+        <div id="dot"></div>
+    </div>
+
+    <!-- ゲームオーバー画面 -->
+    <div id="game-over-screen" class="ui-screen" style="display: none;">
+        <h1>ゲームオーバー！</h1>
+        <p>最終スコア: <span id="final-score">0</span></p>
+        <button id="retry-button">リトライ</button>
+    </div>
+
+    <script>
+        // === ゲームの状態変数 ===
+        let gameStarted = false; // ゲームが開始されているか
+        let gameOver = false;    // ゲームオーバー状態か
+        let score = 0;           // 現在のスコア
+        let dotX, dotY;          // 点の現在のX, Y座標
+        let dotVx, dotVy;        // 点のX, Y方向の速度（velocity）
+        let dotSize = 25;        // 点のサイズ（ピクセル）
+        let dotSpeed = 4;        // 点の初期速度（1フレームあたりの移動ピクセル数）
+
+        let containerWidth, containerHeight; // ゲーム領域の幅と高さ
+        let animationFrameId;    // requestAnimationFrameのID（アニメーション停止用）
+
+        // === DOM要素の参照 ===
+        let introScreen;
+        let startButton;
+        let gameScreen;
+        let dotElement;
+        let scoreDisplay;
+        let gameOverScreen;
+        let finalScoreDisplay;
+        let retryButton;
+
+        // === ゲームロジック定数 ===
+        // 点が壁にどれくらい近づいたらタップ有効とするか（ピクセル）
+        const WALL_HIT_THRESHOLD = 20; 
+        // 成功タップ時の速度増加量
+        const SPEED_INCREMENT = 0.2; 
+
+        /**
+         * DOM要素を初期化し、イベントリスナーを設定する
+         * (ページの読み込み完了時に実行される)
+         */
+        function initializeGameElements() {
+            introScreen = document.getElementById('intro-screen');
+            startButton = document.getElementById('start-button');
+            gameScreen = document.getElementById('game-screen');
+            dotElement = document.getElementById('dot');
+            scoreDisplay = document.getElementById('score-display');
+            gameOverScreen = document.getElementById('game-over-screen');
+            finalScoreDisplay = document.getElementById('final-score');
+            retryButton = document.getElementById('retry-button');
+
+            // ゲームコンテナの初期サイズを取得
+            containerWidth = gameScreen.clientWidth;
+            containerHeight = gameScreen.clientHeight;
+
+            // イベントリスナーの設定
+            startButton.addEventListener('click', startGame);
+            retryButton.addEventListener('click', startGame);
+            gameScreen.addEventListener('click', handleTap);
+            // モバイルでの応答性を高めるため、touchstartイベントも使用
+            // passive: false でpreventDefaultを有効にする
+            gameScreen.addEventListener('touchstart', handleTap, { passive: false }); 
+
+            // ウィンドウサイズ変更時のリサイズ処理
+            window.addEventListener('resize', handleResize);
+        }
+
+        /**
+         * ゲームを開始する
+         */
+        function startGame() {
+            gameStarted = true;
+            gameOver = false;
+            score = 0;
+            dotSpeed = 4; // 速度をリセット
+
+            // 画面の表示/非表示を切り替える
+            introScreen.style.display = 'none';
+            gameOverScreen.style.display = 'none';
+            gameScreen.style.display = 'block';
+            updateScoreDisplay(); // スコア表示を更新
+
+            // 点の初期サイズを設定
+            dotElement.style.width = `${dotSize}px`;
+            dotElement.style.height = `${dotSize}px`;
+            dotElement.style.backgroundColor = 'red'; // 点の初期色
+
+            // 点の初期位置をランダムに設定（壁に近すぎないように）
+            dotX = Math.random() * (containerWidth - dotSize * 2) + dotSize;
+            dotY = Math.random() * (containerHeight - dotSize * 2) + dotSize;
+
+            // 点の初期速度方向をランダムに設定
+            dotVx = (Math.random() > 0.5 ? 1 : -1) * dotSpeed;
+            dotVy = (Math.random() > 0.5 ? 1 : -1) * dotSpeed;
+
+            // ゲームループを開始
+            gameLoop();
+        }
+
+        /**
+         * ゲームのメインループ（アニメーションフレームごとに実行される）
+         */
+        function gameLoop() {
+            if (gameOver) {
+                return; // ゲームオーバーならループを停止
+            }
+
+            // 点の次の位置を計算
+            let nextDotX = dotX + dotVx;
+            let nextDotY = dotY + dotVy;
+
+            // このフレームで点が壁に衝突するかどうかを判定
+            let wouldHitWallX = false;
+            let wouldHitWallY = false;
+
+            // X方向の壁衝突判定: 点が壁を越える位置になり、かつその壁に向かっている場合
+            if ((nextDotX <= 0 && dotVx < 0) || (nextDotX >= containerWidth - dotSize && dotVx > 0)) {
+                wouldHitWallX = true;
+            }
+            // Y方向の壁衝突判定
+            if ((nextDotY <= 0 && dotVy < 0) || (nextDotY >= containerHeight - dotSize && dotVy > 0)) {
+                wouldHitWallY = true;
+            }
+            
+            // ゲームオーバー判定:
+            // 点が壁に衝突する位置になり、かつその壁に向かって移動し続けている（＝タップされなかった）場合
+            if ((wouldHitWallX && ((dotVx < 0 && nextDotX <= 0) || (dotVx > 0 && nextDotX >= containerWidth - dotSize))) ||
+                (wouldHitWallY && ((dotVy < 0 && nextDotY <= 0) || (dotVy > 0 && nextDotY >= containerHeight - dotSize)))) {
+                endGame(); // ゲームオーバー
+                return;
+            }
+
+            // 点の実際の位置を更新
+            dotX = nextDotX;
+            dotY = nextDotY;
+
+            // 境界線補正: 点が壁を突き抜けてしまわないように、壁の端に固定する
+            if (dotX < 0) dotX = 0;
+            if (dotX > containerWidth - dotSize) dotX = containerWidth - dotSize;
+            if (dotY < 0) dotY = 0;
+            if (dotY > containerHeight - dotSize) dotY = containerHeight - dotSize;
+
+            // 壁に衝突したら速度を反転させる（ゲームオーバー判定とは別に、動きを維持するため）
+            if (dotX === 0 || dotX === containerWidth - dotSize) {
+                dotVx = -dotVx;
+            }
+            if (dotY === 0 || dotY === containerHeight - dotSize) {
+                dotVy = -dotVy;
+            }
+
+            // 点の見た目の位置を更新
+            dotElement.style.left = `${dotX}px`;
+            dotElement.style.top = `${dotY}px`;
+
+            // 壁への接近状況に応じた色の変更（視覚的なヒント）
+            let isNearWall = false;
+            if ((dotX <= WALL_HIT_THRESHOLD && dotVx < 0) || (dotX >= containerWidth - dotSize - WALL_HIT_THRESHOLD && dotVx > 0) ||
+                (dotY <= WALL_HIT_THRESHOLD && dotVy < 0) || (dotY >= containerHeight - dotSize - WALL_HIT_THRESHOLD && dotVy > 0)) {
+                isNearWall = true;
+            }
+            // 壁に近づいたら黄色、それ以外は赤
+            dotElement.style.backgroundColor = isNearWall ? 'yellow' : 'red'; 
+
+            // 次のアニメーションフレームをリクエスト
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        /**
+         * 画面タップ時の処理
+         * @param {Event} event - タップイベントオブジェクト
+         */
+        function handleTap(event) {
+            if (!gameStarted || gameOver) return; // ゲーム中以外は処理しない
+
+            // デフォルトのタッチアクション（スクロールなど）を防止
+            if (event.type === 'touchstart') {
+                event.preventDefault();
+            }
+
+            // タップ座標を取得
+            const tapX = event.clientX || event.touches[0].clientX;
+            const tapY = event.clientY || event.touches[0].clientY;
+
+            // 点の画面上の位置とサイズを取得
+            const dotRect = dotElement.getBoundingClientRect();
+
+            // タップが点の範囲内かどうかをチェック
+            if (tapX >= dotRect.left && tapX <= dotRect.right &&
+                tapY >= dotRect.top && tapY <= dotRect.bottom) {
+
+                // 点が壁に近づいており、かつその壁に向かって移動している場合にタップが有効となる
+                let wasDeflected = false; // 点が跳ね返されたかどうか
+
+                // X方向の壁衝突判定と速度反転
+                if ((dotX <= WALL_HIT_THRESHOLD && dotVx < 0) || (dotX >= containerWidth - dotSize - WALL_HIT_THRESHOLD && dotVx > 0)) {
+                    dotVx = -dotVx; // X方向の速度を反転
+                    wasDeflected = true;
+                }
+                // Y方向の壁衝突判定と速度反転
+                if ((dotY <= WALL_HIT_THRESHOLD && dotVy < 0) || (dotY >= containerHeight - dotSize - WALL_HIT_THRESHOLD && dotVy > 0)) {
+                    dotVy = -dotVy; // Y方向の速度を反転
+                    wasDeflected = true;
+                }
+
+                if (wasDeflected) {
+                    score++; // スコア加算
+                    updateScoreDisplay(); // スコア表示を更新
+                    
+                    // 速度を増加させ、現在の移動方向を維持する
+                    dotSpeed += SPEED_INCREMENT;
+                    const currentVelocityMagnitude = Math.sqrt(dotVx * dotVx + dotVy * dotVy); // 現在の速度の大きさ
+                    // 新しい速度と方向を適用
+                    dotVx = (dotVx / currentVelocityMagnitude) * dotSpeed;
+                    dotVy = (dotVy / currentVelocityMagnitude) * dotSpeed;
+                    
+                    // 成功タップ時の視覚フィードバック（一時的に色を緑にする）
+                    dotElement.style.backgroundColor = 'lime';
+                    // 色はgameLoopで壁への近接度に応じてリセットされるため、setTimeoutは不要
+                }
+            }
+        }
+
+        /**
+         * スコア表示を更新する
+         */
+        function updateScoreDisplay() {
+            scoreDisplay.textContent = `スコア: ${score}`;
+        }
+
+        /**
+         * ゲームオーバー処理
+         */
+        function endGame() {
+            gameOver = true;
+            cancelAnimationFrame(animationFrameId); // アニメーションループを停止
+            finalScoreDisplay.textContent = score; // 最終スコアを表示
+            gameScreen.style.display = 'none';    // ゲーム画面を非表示
+            gameOverScreen.style.display = 'block'; // ゲームオーバー画面を表示
+        }
+
+        /**
+         * ウィンドウサイズ変更時の処理
+         */
+        function handleResize() {
+            // ゲームコンテナの新しいサイズを取得
+            containerWidth = gameScreen.clientWidth;
+            containerHeight = gameScreen.clientHeight;
+
+            // ゲーム中の場合、点が新しい境界内に収まるように位置を調整
+            if (gameStarted && !gameOver) {
+                dotX = Math.max(0, Math.min(dotX, containerWidth - dotSize));
+                dotY = Math.max(0, Math.min(dotY, containerHeight - dotSize));
+                dotElement.style.left = `${dotX}px`;
+                dotElement.style.top = `${dotY}px`;
+            }
+        }
+
+        // DOMの読み込みが完了したら、初期化関数を実行
+        window.onload = initializeGameElements;
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

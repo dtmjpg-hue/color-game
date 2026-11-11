@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>連鎖拡大タップゲーム</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        /* 基本的なスタイル */
+        body {
+            margin: 0;
+            overflow: hidden; /* スクロール防止 */
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #222;
+            color: #eee;
+            width: 100vw; /* 画面幅いっぱいに */
+            height: 100vh; /* 画面高さいっぱいに */
+            touch-action: manipulation; /* タップ時の遅延防止 */
+        }
+
+        /* イントロ画面とゲーム画面の共通スタイル */
+        #intro-screen, #game-screen {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            box-sizing: border-box;
+            padding: 20px;
+        }
+
+        /* タイトルと説明文のスタイル */
+        h1 {
+            font-size: 2em;
+            margin-bottom: 20px;
+        }
+
+        p {
+            font-size: 1.1em;
+            line-height: 1.5;
+            margin-bottom: 10px;
+            max-width: 80%;
+        }
+
+        /* ボタンのスタイル */
+        button {
+            padding: 12px 25px;
+            font-size: 1.2em;
+            cursor: pointer;
+            background-color: #4CAF50; /* 緑色のボタン */
+            color: white;
+            border: none;
+            border-radius: 8px;
+            margin-top: 20px;
+            box-shadow: 0 4px #388E3C; /* 影 */
+            transition: background-color 0.2s, box-shadow 0.2s;
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを透明に */
+        }
+
+        button:active {
+            background-color: #388E3C;
+            box-shadow: 0 2px #2E7D32;
+            transform: translateY(2px); /* ボタンが押されたような視覚効果 */
+        }
+
+        /* ゲーム画面のレイアウト調整 */
+        #game-screen {
+            justify-content: flex-start; /* スコアとリトライボタンを上部に配置 */
+        }
+
+        /* スコア表示のスタイル */
+        #score-display {
+            font-size: 1.5em;
+            margin: 15px 0;
+            align-self: flex-start; /* 左寄せ */
+            padding-left: 20px;
+            z-index: 10; /* 他の要素の上に表示 */
+        }
+
+        /* リトライボタンのスタイル */
+        #retryButton {
+            position: absolute;
+            top: 15px;
+            right: 20px;
+            font-size: 0.9em;
+            padding: 8px 15px;
+            margin: 0;
+            background-color: #f44336; /* 赤色のボタン */
+            box-shadow: 0 3px #d32f2f;
+            z-index: 10; /* 他の要素の上に表示 */
+        }
+
+        #retryButton:active {
+            background-color: #d32f2f;
+            box-shadow: 0 1px #c62828;
+            transform: translateY(2px);
+        }
+
+        /* ゲームエリア (点を配置する場所) */
+        #game-area {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+        }
+
+        /* 点の基本スタイル */
+        .dot {
+            position: absolute;
+            border-radius: 50%; /* 円形にする */
+            cursor: pointer; /* タップ可能であることを示すカーソル */
+            box-sizing: border-box;
+            background-color: #2196F3; /* DEFAULT_COLOR: タップ可能な点の色 (青) */
+            transition: background-color 0.2s ease, opacity 0.5s ease-out; /* 色変化とフェードアウトのアニメーション */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを透明に */
+        }
+
+        /* 拡大中の点の色 */
+        .dot.expanding {
+            background-color: #FF9800; /* EXPANDING_COLOR: 拡大中の点の色 (オレンジ) */
+            cursor: default; /* 拡大中はカーソルをデフォルトに */
+        }
+
+        /* 拡大終了後の点の色と透明度 */
+        .dot.finished {
+            background-color: rgba(255, 0, 0, 0.5); /* FINISHED_COLOR: 終了した点の色 (半透明赤) */
+            opacity: 0; /* フェードアウト */
+        }
+    </style>
+</head>
+<body>
+    <!-- イントロ画面 -->
+    <div id="intro-screen">
+        <h1>連鎖拡大タップゲーム</h1>
+        <p>画面上の点をタップするとその点が拡大し、他の点に触れると連鎖的に拡大します。</p>
+        <p>一回のタップで最大の連鎖反応を目指しましょう！</p>
+        <button id="startButton">スタート</button>
+    </div>
+
+    <!-- ゲーム画面 -->
+    <div id="game-screen" style="display: none;">
+        <div id="score-display">連鎖数: <span id="current-score">0</span></div>
+        <button id="retryButton">リトライ</button>
+        <div id="game-area"></div> <!-- 点を配置する領域 -->
+    </div>
+
+    <script>
+        // 定数定義
+        const INITIAL_DOT_COUNT = 30; // 初期点の数
+        const MIN_INITIAL_DOT_SIZE = 30; // 初期点の最小サイズ (直径 px)
+        const MAX_INITIAL_DOT_SIZE = 50; // 初期点の最大サイズ (直径 px)
+        const MAX_DOT_SIZE_FACTOR = 3.5; // 初期サイズに対する最大拡大倍率
+        const EXPAND_SPEED = 0.02; // 拡大速度 (1フレームあたりの拡大率)
+        const DOT_PADDING = 15; // 点同士が重ならないようにする最小間隔 (px)
+        const EXPAND_COLLISION_THRESHOLD = 0.8; // 拡大中の点が他の点と接触判定する際の閾値 (割合)
+
+        // DOM要素の取得
+        const introScreen = document.getElementById('intro-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const startButton = document.getElementById('startButton');
+        const retryButton = document.getElementById('retryButton');
+        const currentScoreSpan = document.getElementById('current-score');
+        const gameArea = document.getElementById('game-area');
+
+        // ゲーム状態変数
+        let dots = []; // 点オブジェクトの配列
+        let currentChainCount = 0; // 現在の連鎖数
+        let isGameActive = false; // ゲームがプレイ中か否か
+        let activeExpanders = new Set(); // 現在拡大中の点のIDを格納するSet
+        let animationFrameId = null; // requestAnimationFrame のID
+
+        // ドットオブジェクトの構造:
+        // { id: number, element: HTMLElement, x: number, y: number, size: number, max_size: number, state: 'default' | 'expanding' | 'finished' }
+
+        // イベントリスナー設定
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', retryGame);
+        // gameArea.addEventListener('click', handleGameAreaTap); // 空白タップ時は何もしないので不要
+
+        // ページロード時にゲームを初期化
+        window.addEventListener('load', initGame);
+        window.addEventListener('resize', () => {
+            // 画面サイズ変更時に、ゲームがアクティブならリトライしてレイアウトを調整
+            if (isGameActive) {
+                retryGame();
+            }
+        });
+
+        // ゲーム初期化
+        function initGame() {
+            // 初期状態ではイントロ画面を表示し、ゲーム画面は非表示
+            introScreen.style.display = 'flex';
+            gameScreen.style.display = 'none';
+            // 初回描画時に点を生成しておく
+            generateDots();
+        }
+
+        // ゲーム開始
+        function startGame() {
+            introScreen.style.display = 'none';
+            gameScreen.style.display = 'flex';
+            isGameActive = true;
+            // 既に generateDots() で点が生成されている
+        }
+
+        // ドットの作成とDOMへの追加
+        function createDot(id, x, y, initialSize) {
+            const dotElement = document.createElement('div');
+            dotElement.classList.add('dot');
+            dotElement.style.width = initialSize + 'px';
+            dotElement.style.height = initialSize + 'px';
+            dotElement.style.left = (x - initialSize / 2) + 'px';
+            dotElement.style.top = (y - initialSize / 2) + 'px';
+            dotElement.dataset.id = id; // タップイベントで識別するためにIDを付与
+
+            const dot = {
+                id: id,
+                element: dotElement,
+                x: x,
+                y: y,
+                size: initialSize,
+                max_size: initialSize * MAX_DOT_SIZE_FACTOR,
+                state: 'default'
+            };
+            dots.push(dot);
+            gameArea.appendChild(dotElement);
+
+            // 点がタップされたときのイベントリスナー
+            dotElement.addEventListener('click', (e) => onDotTap(e, dot.id));
+            dotElement.addEventListener('touchstart', (e) => onDotTap(e, dot.id), { passive: false });
+            return dot;
+        }
+
+        // ドットの生成と画面への配置
+        function generateDots() {
+            dots = []; // 既存のドットをクリア
+            gameArea.innerHTML = ''; // DOMからすべてのドット要素を削除
+            currentChainCount = 0;
+            updateScore(0);
+            activeExpanders.clear(); // 拡大中の点もクリア
+
+            const numDots = INITIAL_DOT_COUNT;
+            const areaWidth = gameArea.offsetWidth;
+            const areaHeight = gameArea.offsetHeight;
+
+            for (let i = 0; i < numDots; i++) {
+                let newDot;
+                let collided;
+                let attempts = 0;
+                const maxAttempts = 100; // 重ならない位置を見つける試行回数
+
+                const initialSize = Math.random() * (MAX_INITIAL_DOT_SIZE - MIN_INITIAL_DOT_SIZE) + MIN_INITIAL_DOT_SIZE;
+                const radius = initialSize / 2;
+
+                do {
+                    collided = false;
+                    // ランダムな位置を生成
+                    const x = Math.random() * (areaWidth - initialSize) + initialSize / 2;
+                    const y = Math.random() * (areaHeight - initialSize) + initialSize / 2;
+
+                    // 既存のドットと衝突していないかチェック
+                    for (const existingDot of dots) {
+                        const existingRadius = existingDot.size / 2;
+                        const dx = x - existingDot.x;
+                        const dy = y - existingDot.y;
+                        const distance = Math.sqrt(dx * dx + dy * dy);
+
+                        if (distance < (radius + existingRadius + DOT_PADDING)) {
+                            collided = true;
+                            break;
+                        }
+                    }
+                    attempts++;
+                    if (!collided) {
+                        newDot = createDot(i, x, y, initialSize);
+                    }
+                } while (collided && attempts < maxAttempts);
+
+                // 試行回数を超えた場合は、多少重なってもそのまま配置
+                if (attempts >= maxAttempts) {
+                    // console.warn(`Failed to place dot ${i} without collision after ${maxAttempts} attempts.`);
+                    const x = Math.random() * (areaWidth - initialSize) + initialSize / 2;
+                    const y = Math.random() * (areaHeight - initialSize) + initialSize / 2;
+                    createDot(i, x, y, initialSize);
+                }
+            }
+        }
+
+        // ドットがタップされた時の処理
+        function onDotTap(event, dotId) {
+            // イベントのデフォルト動作をキャンセル (特に touchstart でスクロールなどを防ぐ)
+            event.preventDefault();
+
+            if (!isGameActive) return;
+            // 既に拡大中の連鎖がある場合は新しいタップは無視
+            if (activeExpanders.size > 0) return;
+
+            const tappedDot = dots.find(d => d.id === dotId);
+            if (tappedDot && tappedDot.state === 'default') {
+                tappedDot.state = 'expanding';
+                tappedDot.element.classList.add('expanding');
+                activeExpanders.add(dotId); // 拡大中の点として登録
+                currentChainCount = 1; // 新しい連鎖の開始
+                updateScore(currentChainCount);
+
+                // アニメーションループが実行中でなければ開始
+                if (!animationFrameId) {
+                    animationFrameId = requestAnimationFrame(animateDots);
+                }
+                event.stopPropagation(); // 親要素 (gameArea) のタップイベントが発火しないように
+            }
+        }
+
+        // アニメーションループの本体
+        function animateDots() {
+            const newExpanders = new Set(); // 新たに拡大状態になった点を一時的に保持
+            const finishedExpanders = new Set(); // 拡大が終了した点を一時的に保持
+
+            for (const dotId of activeExpanders) {
+                const dot = dots.find(d => d.id === dotId);
+                // 点が見つからないか、既に拡大中でない場合はスキップ
+                if (!dot || dot.state !== 'expanding') continue;
+
+                dot.size += EXPAND_SPEED * dot.max_size; // 速度に応じて拡大
+
+                if (dot.size >= dot.max_size) {
+                    // 最大サイズに達したら拡大終了
+                    dot.size = dot.max_size;
+                    dot.state = 'finished';
+                    dot.element.classList.remove('expanding');
+                    dot.element.classList.add('finished');
+                    finishedExpanders.add(dotId);
+
+                    // CSSアニメーションの完了を待ってからDOMから削除
+                    setTimeout(() => {
+                        if (dot.element && dot.element.parentNode) {
+                            dot.element.parentNode.removeChild(dot.element);
+                            // dots配列からも物理的に削除 (メモリとパフォーマンスの最適化)
+                            dots = dots.filter(d => d.id !== dot.id);
+                        }
+                    }, 500); // CSS transition duration (0.5s) に合わせる
+                }
+
+                // 衝突判定: 拡大中の点と他のデフォルト状態の点をチェック
+                for (const otherDot of dots) {
+                    // 自分自身、または既に拡大中/終了の点は無視
+                    if (otherDot.id === dot.id || otherDot.state !== 'default') continue;
+
+                    if (checkCollision(dot, otherDot)) {
+                        // 衝突したら、その点も拡大状態に移行
+                        otherDot.state = 'expanding';
+                        otherDot.element.classList.add('expanding');
+                        newExpanders.add(otherDot.id); // 新たな拡大点として登録
+                        currentChainCount++; // 連鎖数をカウントアップ
+                        updateScore(currentChainCount);
+                    }
+                }
+
+                // DOM要素のスタイルを更新して、拡大を視覚的に表現
+                dot.element.style.width = dot.size + 'px';
+                dot.element.style.height = dot.size + 'px';
+                dot.element.style.left = (dot.x - dot.size / 2) + 'px';
+                dot.element.style.top = (dot.y - dot.size / 2) + 'px';
+            }
+
+            // activeExpanders (現在拡大中の点のIDセット) を更新
+            for (const id of finishedExpanders) {
+                activeExpanders.delete(id); // 拡大が終了した点を削除
+            }
+            for (const id of newExpanders) {
+                activeExpanders.add(id); // 新たに拡大状態になった点を追加
+            }
+
+            // 拡大中の点がまだある場合、次のフレームを要求
+            if (activeExpanders.size > 0) {
+                animationFrameId = requestAnimationFrame(animateDots);
+            } else {
+                // すべての連鎖が終了したらアニメーションを停止
+                cancelAnimationFrame(animationFrameId);
+                animationFrameId = null;
+                // 次のタップを受け付けられる状態になる
+            }
+        }
+
+        // 2点間の衝突判定
+        function checkCollision(dot1, dot2) {
+            const dx = dot1.x - dot2.x;
+            const dy = dot1.y - dot2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+
+            // dot1 (拡大中の点) の現在の半径と、dot2 (デフォルトの点) の初期半径を用いて判定
+            // EXPAND_COLLISION_THRESHOLD で判定を早める
+            return distance < (dot1.size / 2 + dot2.size / 2 * EXPAND_COLLISION_THRESHOLD);
+        }
+
+        // スコア表示の更新
+        function updateScore(score) {
+            currentScoreSpan.textContent = score;
+        }
+
+        // ゲームリトライ
+        function retryGame() {
+            cancelAnimationFrame(animationFrameId); // 現在のアニメーションを停止
+            animationFrameId = null;
+            activeExpanders.clear(); // 拡大中の点リストをクリア
+            dots = []; // ドット配列をクリア
+            gameArea.innerHTML = ''; // DOMからすべてのドット要素を削除
+            currentChainCount = 0;
+            updateScore(0);
+            generateDots(); // 新しいドットを生成し直す
+            isGameActive = true; // ゲームをアクティブ状態に戻す
+        }
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

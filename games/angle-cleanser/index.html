@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>線分角度消しゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #f0f0f0;
+            color: #333;
+            -webkit-user-select: none; /* Safari */
+            -ms-user-select: none; /* IE 10+ */
+            user-select: none; /* Standard syntax */
+        }
+
+        #game-container {
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            width: 100vw;
+            height: 100vh;
+            max-width: 600px; /* 縦画面の幅制限 */
+            box-sizing: border-box;
+            padding: 10px;
+        }
+
+        h1 {
+            font-size: 6vw;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        p {
+            font-size: 3.5vw;
+            line-height: 1.4;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        button {
+            padding: 3vw 6vw;
+            font-size: 4vw;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.2s ease;
+            margin-top: 20px;
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        button:active {
+            background-color: #0056b3;
+        }
+
+        #timer {
+            font-size: 4vw;
+            margin-bottom: 10px;
+            color: #555;
+            text-align: center;
+        }
+
+        #game-canvas {
+            display: block;
+            background-color: white;
+            border: 2px solid #ccc;
+            touch-action: none; /* タップ時のデフォルト動作を無効化 */
+        }
+
+        #final-time {
+            font-size: 5vw;
+            font-weight: bold;
+            margin-bottom: 20px;
+            color: #007bff;
+            text-align: center;
+        }
+
+        /* 画面表示の制御 */
+        #start-screen, #game-screen, #end-screen {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="start-screen">
+            <h1>線分角度消しゲーム</h1>
+            <p>画面に表示された線分をタップ！</p>
+            <p>タップした線分と同じ角度の線分が全て消えます。</p>
+            <p>全ての線分を消すまでのタイムを競いましょう！</p>
+            <button id="start-button">スタート</button>
+        </div>
+
+        <div id="game-screen" style="display:none;">
+            <div id="timer">タイム: 0.00秒</div>
+            <canvas id="game-canvas"></canvas>
+        </div>
+
+        <div id="end-screen" style="display:none;">
+            <h1>ゲームクリア！</h1>
+            <div id="final-time"></div>
+            <button id="retry-button">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM elements
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const endScreen = document.getElementById('end-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const timerDisplay = document.getElementById('timer');
+        const finalTimeDisplay = document.getElementById('final-time');
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // Game state variables
+        let gameStarted = false;
+        let lines = [];
+        let startTime;
+        let timerInterval;
+        let gameWidth, gameHeight;
+
+        // Game settings
+        const NUM_LINES_PER_ANGLE_GROUP = 7; // 各角度グループに属する線分の数
+        const ANGLE_TYPES = [0, 20, 40, 60, 80, 100, 120, 140, 160]; // 固定角度グループ
+        const TOTAL_LINES = NUM_LINES_PER_ANGLE_GROUP * ANGLE_TYPES.length;
+        const LINE_LENGTH = 60; // 線分の長さ
+        const LINE_THICKNESS = 4; // 線分の描画太さ
+        const LINE_HIT_THRESHOLD = 20; // タップ判定の閾値（ピクセル、中心からの距離）
+
+        // --- Utility Functions ---
+
+        // 点(px, py)から線分(x1, y1)-(x2, y2)への最短距離の2乗を計算
+        function distToSegmentSquared(px, py, x1, y1, x2, y2) {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lenSq = dx * dx + dy * dy;
+
+            if (lenSq === 0) { // 線分が点の場合
+                const dpx = px - x1;
+                const dpy = py - y1;
+                return dpx * dpx + dpy * dpy;
+            }
+
+            // 点Pから線分ABに下ろした垂線の足が線分ABのどこに位置するかを示すパラメータt
+            let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+            t = Math.max(0, Math.min(1, t)); // tを0-1の範囲にクランプ
+
+            const projX = x1 + t * dx;
+            const projY = y1 + t * dy;
+
+            const dProjX = px - projX;
+            const dProjY = py - projY;
+            return dProjX * dProjX + dProjY * dProjY;
+        }
+
+        // --- Game Logic Functions ---
+
+        function initGame() {
+            // イベントリスナーの設定
+            startButton.addEventListener('touchstart', (e) => {
+                e.preventDefault(); // デフォルトのタッチ動作を抑制
+                startGame();
+            });
+            startButton.addEventListener('click', startGame); // PCテスト用
+
+            retryButton.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                resetGame();
+            });
+            retryButton.addEventListener('click', resetGame); // PCテスト用
+
+            canvas.addEventListener('touchstart', handleTap, { passive: false }); // passive: false で preventDefault() を有効に
+            canvas.addEventListener('click', (e) => { // PCテスト用
+                // touchstart で preventDefault() していると click イベントが発火しない場合があるため、両方で判定する
+                // もしtouchstartで既に処理済みならclickでは何もしないようにする
+                if (e.pointerType === 'touch') return; // タッチイベント起因なら何もしない
+                handleTap(e);
+            });
+
+            // 初期画面表示
+            startScreen.style.display = 'flex';
+            gameScreen.style.display = 'none';
+            endScreen.style.display = 'none';
+        }
+
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameScreen.style.display = 'flex'; // flexにしてcanvasを中央寄せ
+
+            // キャンバスサイズを画面に合わせる
+            gameWidth = window.innerWidth;
+            gameHeight = window.innerHeight - timerDisplay.offsetHeight - 20; // タイマーと余白を考慮
+            
+            // max-width 600px に合わせる
+            if (gameWidth > 600) gameWidth = 600;
+
+            canvas.width = gameWidth * window.devicePixelRatio;
+            canvas.height = gameHeight * window.devicePixelRatio;
+            canvas.style.width = gameWidth + 'px';
+            canvas.style.height = gameHeight + 'px';
+            ctx.scale(window.devicePixelRatio, window.devicePixelRatio); // 解像度スケーリング
+
+            lines = [];
+            generateLines();
+            drawLines();
+
+            startTime = Date.now();
+            timerInterval = setInterval(updateTimer, 10); // 10msごとに更新
+            gameStarted = true;
+        }
+
+        function generateLines() {
+            for (const angleDeg of ANGLE_TYPES) {
+                const angleRad = angleDeg * Math.PI / 180;
+                for (let i = 0; i < NUM_LINES_PER_ANGLE_GROUP; i++) {
+                    // 線分が画面からはみ出さないように中心座標を調整
+                    const buffer = LINE_LENGTH / 2 + LINE_THICKNESS;
+                    const centerX = Math.random() * (gameWidth - 2 * buffer) + buffer;
+                    const centerY = Math.random() * (gameHeight - 2 * buffer) + buffer;
+
+                    const halfLengthX = (LINE_LENGTH / 2) * Math.cos(angleRad);
+                    const halfLengthY = (LINE_LENGTH / 2) * Math.sin(angleRad);
+
+                    const x1 = centerX - halfLengthX;
+                    const y1 = centerY - halfLengthY;
+                    const x2 = centerX + halfLengthX;
+                    const y2 = centerY + halfLengthY;
+
+                    lines.push({ x1, y1, x2, y2, angleDeg });
+                }
+            }
+        }
+
+        function drawLines() {
+            ctx.clearRect(0, 0, gameWidth, gameHeight); // 全体をクリア
+            ctx.lineWidth = LINE_THICKNESS;
+            ctx.strokeStyle = '#666'; // 線分の色
+
+            for (const line of lines) {
+                ctx.beginPath();
+                ctx.moveTo(line.x1, line.y1);
+                ctx.lineTo(line.x2, line.y2);
+                ctx.stroke();
+            }
+        }
+
+        function handleTap(event) {
+            if (!gameStarted) return;
+
+            event.preventDefault(); // スクロールやズームを防止
+
+            const rect = canvas.getBoundingClientRect();
+            let clientX, clientY;
+
+            if (event.touches && event.touches.length > 0) {
+                clientX = event.touches[0].clientX;
+                clientY = event.touches[0].clientY;
+            } else { // Fallback for mouse events
+                clientX = event.clientX;
+                clientY = event.clientY;
+            }
+            
+            // キャンバス内の相対座標に変換
+            const tapX = clientX - rect.left;
+            const tapY = clientY - rect.top;
+
+            let hitLine = null;
+            let minDistSq = LINE_HIT_THRESHOLD * LINE_HIT_THRESHOLD;
+
+            for (const line of lines) {
+                const distSq = distToSegmentSquared(tapX, tapY, line.x1, line.y1, line.x2, line.y2);
+                if (distSq < minDistSq) {
+                    minDistSq = distSq;
+                    hitLine = line;
+                }
+            }
+
+            if (hitLine) {
+                const targetAngle = hitLine.angleDeg;
+                lines = lines.filter(line => line.angleDeg !== targetAngle); // 同じ角度の線分を全て削除
+                drawLines(); // 残った線分を再描画
+
+                if (lines.length === 0) {
+                    endGame();
+                }
+            }
+        }
+
+        function updateTimer() {
+            const elapsedTime = (Date.now() - startTime) / 1000;
+            timerDisplay.textContent = `タイム: ${elapsedTime.toFixed(2)}秒`;
+        }
+
+        function endGame() {
+            gameStarted = false;
+            clearInterval(timerInterval);
+
+            const finalTime = (Date.now() - startTime) / 1000;
+            finalTimeDisplay.textContent = `クリアタイム: ${finalTime.toFixed(2)}秒`;
+
+            gameScreen.style.display = 'none';
+            endScreen.style.display = 'flex';
+        }
+
+        function resetGame() {
+            endScreen.style.display = 'none';
+            startScreen.style.display = 'flex';
+            
+            // ゲーム状態をリセット
+            gameStarted = false;
+            lines = [];
+            clearInterval(timerInterval);
+            timerDisplay.textContent = 'タイム: 0.00秒';
+            ctx.clearRect(0, 0, canvas.width, canvas.height); // キャンバスをクリア
+        }
+
+        // Initialize the game when the DOM is fully loaded
+        document.addEventListener('DOMContentLoaded', initGame);
+
+        // ウィンドウサイズ変更時にキャンバスサイズを調整 (スマホ回転など)
+        window.addEventListener('resize', () => {
+            if (gameStarted) {
+                // ゲーム中にリサイズされた場合は再描画
+                // ここでstartGameを呼び出すとリセットされるので、描画のみ更新する
+                // スマホゲームなので、基本的に縦画面固定を想定し、この処理は簡易的で良い
+                gameWidth = window.innerWidth;
+                gameHeight = window.innerHeight - timerDisplay.offsetHeight - 20;
+                if (gameWidth > 600) gameWidth = 600;
+
+                canvas.width = gameWidth * window.devicePixelRatio;
+                canvas.height = gameHeight * window.devicePixelRatio;
+                canvas.style.width = gameWidth + 'px';
+                canvas.style.height = gameHeight + 'px';
+                ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+                drawLines();
+            }
+        });
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

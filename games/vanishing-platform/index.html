@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ラストブロック予測</title>
+<style>
+  /* 全体設定 */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #1e2a44; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; /* ピンチズームやダブルタップズームを無効化 */
+    user-select: none; /* テキスト選択を無効化 */
+    -webkit-user-select: none; /* Safari/iOSでのテキスト選択を無効化 */
+  }
+  
+  /* アプリコンテナ */
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  
+  /* HUD (Head-Up Display) - スコアと時間表示 */
+  #hud { padding: 12px 16px 8px; background: #16203a; }
+  #stats { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; }
+  #instructionBox { margin-top: 8px; padding: 10px; text-align: center; background: #4a86ff; color: #001a3a;
+    border-radius: 12px; font-size: 20px; font-weight: bold; transition: background .3s; }
+  
+  /* ゲームフィールド */
+  #field { position: relative; flex: 1; overflow: hidden; }
+  
+  /* ゲームブロック */
+  .block { position: absolute; width: 60px; height: 60px; display: flex; align-items: center; justify-content: center;
+    font-size: 28px; background: #5bc0de; border-radius: 8px; cursor: pointer; transition: transform .1s, opacity .3s;
+    user-select: none; -webkit-user-select: none;
+  }
+  .block:active { transform: scale(0.9); } /* タップ時の視覚フィードバック */
+  .block.fade-out { opacity: 0; transform: scale(0.5); pointer-events: none; } /* 消えるアニメーション */
+  
+  /* フィードバックテキスト (正解/不正解) */
+  .fb { position: absolute; font-size: 26px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; z-index: 5; }
+  .fb.good { color: #7dffa0; } /* 正解時の色 */
+  .fb.bad { color: #ff7d7d; } /* 不正解時の色 */
+  @keyframes rise { /* フィードバックテキストが上昇して消えるアニメーション */
+    to { transform: translateY(-40px); opacity: 0; }
+  }
+  
+  /* オーバーレイ (ゲーム開始前/終了後) */
+  #overlay { position: absolute; inset: 0; background: rgba(10,16,32,.94); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 16px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  #overlay .big { font-size: 42px; font-weight: bold; color: #ffd54a; margin: 8px 0; }
+  
+  /* ボタン */
+  button { margin-top: 24px; padding: 16px 40px; font-size: 22px; font-weight: bold; color: #3a2a00;
+    background: #ffd54a; border: none; border-radius: 14px; cursor: pointer; }
+  button:active { transform: scale(.96); } /* タップ時の視覚フィードバック */
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats"><span>スコア <span id="score">0</span></span><span>のこり <span id="time">0</span>秒</span></div>
+    <div id="instructionBox"></div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ラストブロック予測</h1>
+    <div id="ovBody">
+      <p>画面に現れる複数のブロックのうち、</p>
+      <p><b>最後に残る１つ</b>を素早く予測してタップしよう！</p>
+      <p>制限時間は30秒！</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // ゲーム設定
+  var GAME_SECONDS = 30; // ゲームの総時間（秒）
+  var BLOCKS_PER_ROUND = 5; // 1ラウンドあたりのブロック数
+  var MIN_BLOCK_LIFETIME = 1500; // 不正解ブロックの最短生存時間 (ms)
+  var MAX_BLOCK_LIFETIME = 3500; // 不正解ブロックの最長生存時間 (ms)
+  var CORRECT_BLOCK_EXTRA_LIFETIME = 800; // 正解ブロックが他のブロックより長く表示される時間 (ms)
+  var ROUND_INTERVAL = 500; // ラウンド間のインターバル (ms)
+
+  // DOM要素への参照
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var timeEl = document.getElementById("time");
+  var instructionBox = document.getElementById("instructionBox");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲームの状態変数
+  var score = 0;
+  var timeLeft = 0;
+  var running = false; // ゲームが実行中か
+  var roundActive = false; // 現在のラウンドでタップを受け付けるか
+  var correctBlockId = null; // 現在のラウンドの正解ブロックのID
+  var blockIdCounter = 0; // ブロックのユニークIDを生成するためのカウンター
+  var blockElements = {}; // アクティブなブロック要素をIDで管理 (例: {id: HTMLElement})
+  var fadeOutTimeouts = {}; // ブロックのフェードアウトタイマーをIDで管理 (例: {id: TimeoutId})
+
+  var clockInterval = null; // 全体ゲームタイマーのID
+  var roundTimeout = null; // 次のラウンド開始タイマーのID
+
+  // ヘルパー関数: ローカルストレージからのベストスコア読み込み
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("lastBlockPredict_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+
+  // ヘルパー関数: ローカルストレージへのベストスコア保存
+  function saveBest(v) {
+    try { localStorage.setItem("lastBlockPredict_best", String(v)); } catch (e) {}
+  }
+
+  // ヘルパー関数: スコアの更新と表示
+  function setScore(v) {
+    score = v;
+    scoreEl.textContent = String(score);
+  }
+
+  // ヘルパー関数: 画面上部の指示テキストの更新
+  function setInstruction(text) {
+    instructionBox.textContent = text;
+  }
+
+  // ヘルパー関数: タップ結果のフィードバック表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // イベント発生座標から、フィールド要素内の相対座標に調整
+    var fieldRect = field.getBoundingClientRect();
+    f.style.left = (x - fieldRect.left - (f.offsetWidth / 2)) + "px";
+    f.style.top = (y - fieldRect.top - (f.offsetHeight / 2)) + "px";
+    field.appendChild(f);
+    // アニメーション終了後にDOMから削除
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 650);
+  }
+
+  // ブロックの生成
+  function createBlock(id) {
+    var rect = field.getBoundingClientRect();
+    var size = 60; // ブロックのサイズ
+    var maxX = Math.max(0, rect.width - size);
+    var maxY = Math.max(0, rect.height - size);
+
+    var el = document.createElement("div");
+    el.className = "block";
+    // ランダムな位置に配置
+    el.style.left = Math.floor(Math.random() * maxX) + "px";
+    el.style.top = Math.floor(Math.random() * maxY) + "px";
+    el.dataset.id = id; // データ属性にブロックIDを設定
+
+    // ブロックの色をランダムに設定
+    el.style.backgroundColor = `hsl(${Math.random() * 360}, 70%, 65%)`;
+
+    var handled = false; // 1ラウンドで複数回タップされるのを防ぐフラグ
+    el.addEventListener("pointerdown", function (ev) {
+      ev.preventDefault(); // デフォルトの挙動（スクロールなど）を抑制
+      // ゲームが実行中でなく、ラウンドがアクティブでなく、既に処理済みなら何もしない
+      if (handled || !running || !roundActive) return; 
+      
+      handled = true;
+      roundActive = false; // このラウンドでの追加タップを無効化
+      
+      // フィードバック表示位置の計算（タップされた位置）
+      var tapX = ev.clientX;
+      var tapY = ev.clientY;
+
+      if (parseInt(el.dataset.id, 10) === correctBlockId) {
+        setScore(score + 10);
+        feedback(tapX, tapY, "+10", "good");
+      } else {
+        setScore(Math.max(0, score - 5)); // スコアは0未満にならないように
+        feedback(tapX, tapY, "-5", "bad");
+      }
+
+      // タップされたら、全てのブロックの消滅タイマーをクリアし、即座に消す
+      Object.keys(fadeOutTimeouts).forEach(function(key) {
+        clearTimeout(fadeOutTimeouts[key]);
+      });
+      for (var blockId in blockElements) {
+        var block = blockElements[blockId];
+        if (block && block.parentNode) {
+          block.classList.add("fade-out");
+          setTimeout(function(b) {
+            if (b.parentNode) b.parentNode.removeChild(b);
+          }.bind(null, block), 300); // CSSアニメーションの時間に合わせて少し遅れて削除
+        }
+      }
+      blockElements = {}; // アクティブなブロック要素をリセット
+      fadeOutTimeouts = {}; // タイマーもリセット
+
+      // ゲーム時間が残っていれば、次のラウンドを開始
+      if (timeLeft > 0) {
+        clearTimeout(roundTimeout); // 既存のラウンドタイマーがあればクリア
+        roundTimeout = setTimeout(startRound, ROUND_INTERVAL);
+      }
+    });
+
+    field.appendChild(el);
+    blockElements[id] = el; // 生成したブロック要素を管理リストに追加
+    return el;
+  }
+
+  // ブロックの消滅処理（アニメーション後にDOMから削除）
+  function fadeBlock(id) {
+    var el = blockElements[id];
+    if (el) {
+      el.classList.add("fade-out"); // フェードアウトアニメーション開始
+      setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el); // DOMから削除
+        delete blockElements[id]; // 管理リストから削除
+        delete fadeOutTimeouts[id]; // タイマーリストから削除
+      }, 300); // CSSアニメーションの時間と合わせる
+    }
+  }
+
+  // 新しいラウンドの開始
+  function startRound() {
+    if (!running) return; // ゲームが実行中でなければ何もしない
+
+    field.innerHTML = ""; // 前のラウンドのブロックをクリア
+    blockElements = {}; // ブロックリストをリセット
+    fadeOutTimeouts = {}; // タイマーリストをリセット
+    roundActive = true; // このラウンドでタップを受け付ける
+    setInstruction("最後に残るブロックをタップ！"); // 指示を更新
+
+    var blockIds = [];
+    for (var i = 0; i < BLOCKS_PER_ROUND; i++) {
+      blockIdCounter++; // ユニークIDをインクリメント
+      blockIds.push(blockIdCounter);
+      createBlock(blockIdCounter); // ブロックを生成
+    }
+
+    // 正解ブロックをランダムに選ぶ
+    correctBlockId = blockIds[Math.floor(Math.random() * blockIds.length)];
+    
+    // 不正解ブロックの消滅時間リストを生成し、ソート
+    var nonCorrectBlockFadeTimes = [];
+    for (var i = 0; i < BLOCKS_PER_ROUND - 1; i++) {
+      nonCorrectBlockFadeTimes.push(
+        Math.random() * (MAX_BLOCK_LIFETIME - MIN_BLOCK_LIFETIME) + MIN_BLOCK_LIFETIME
+      );
+    }
+    nonCorrectBlockFadeTimes.sort((a, b) => a - b); // 短いものから順に消えるようにソート
+
+    var nonCorrectBlockIndex = 0;
+    for (var id of blockIds) {
+      if (id === correctBlockId) {
+        // 正解ブロックは他のブロックが全て消えた後も少し残るように設定
+        var correctBlockFadeTime = MAX_BLOCK_LIFETIME + CORRECT_BLOCK_EXTRA_LIFETIME;
+        fadeOutTimeouts[id] = setTimeout(fadeBlock, correctBlockFadeTime, id);
+      } else {
+        // 不正解ブロックはソートされた時間で順次消える
+        var fadeTime = nonCorrectBlockFadeTimes[nonCorrectBlockIndex++];
+        fadeOutTimeouts[id] = setTimeout(fadeBlock, fadeTime, id);
+      }
+    }
+  }
+
+  // ゲームの残り時間カウントダウン処理
+  function tick() {
+    timeLeft -= 1;
+    timeEl.textContent = String(Math.max(0, timeLeft)); // 0未満にならないように表示
+    if (timeLeft <= 0) {
+      endGame(); // 時間が0になったらゲーム終了
+      return;
+    }
+  }
+
+  // ゲーム開始処理
+  function startGame() {
+    field.innerHTML = ""; // フィールドをクリア
+    setScore(0); // スコアをリセット
+    timeLeft = GAME_SECONDS; // 残り時間を設定
+    timeEl.textContent = String(timeLeft);
+    overlay.style.display = "none"; // オーバーレイを非表示に
+    running = true; // ゲームを走行状態に
+    roundActive = false; // 最初のラウンドが始まるまでタップ無効
+    correctBlockId = null;
+    blockIdCounter = 0; // ブロックIDカウンターをリセット
+    blockElements = {}; // ブロック要素リストをリセット
+    fadeOutTimeouts = {}; // フェードアウトタイマーリストをリセット
+
+    clearTimeout(roundTimeout); // 既存のラウンドタイマーをクリア
+    clearInterval(clockInterval); // 既存のゲームタイマーをクリア
+
+    clockInterval = setInterval(tick, 1000); // 1秒ごとにtick関数を実行
+    roundTimeout = setTimeout(startRound, ROUND_INTERVAL); // 最初のラウンドを少し遅れて開始
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false; // ゲームを非走行状態に
+    roundActive = false; // タップを受け付けない
+    clearTimeout(roundTimeout); // ラウンドタイマーをクリア
+    clearInterval(clockInterval); // ゲームタイマーをクリア
+
+    // 残っている全てのブロックの消滅タイマーをクリアし、DOMから削除
+    Object.keys(fadeOutTimeouts).forEach(function(key) {
+      clearTimeout(fadeOutTimeouts[key]);
+    });
+    field.innerHTML = "";
+    blockElements = {};
+    fadeOutTimeouts = {};
+
+    var best = loadBest(); // ベストスコアを読み込む
+    var isNew = score > best; // 新記録か判定
+    if (isNew) { best = score; saveBest(best); } // 新記録なら保存
+
+    setInstruction(""); // 指示をクリア
+
+    ovTitle.textContent = "タイムアップ!";
+    ovBody.innerHTML =
+      '<p>あなたのスコア</p><div class="big">' + score + '点</div>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? "(新記録!)" : "") + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  // 「スタート」ボタンにイベントリスナーを設定
+  startBtn.addEventListener("click", startGame);
+
+  // 初期化時の指示表示（オーバーレイが表示されている状態）
+  setInstruction("最後に残るブロックをタップ！");
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
+```

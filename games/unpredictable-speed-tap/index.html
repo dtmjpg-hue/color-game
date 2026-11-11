@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ぴったりタップ</title>
+<style>
+  /* 全体設定 */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #1e2a44; /* ダークブルー系の背景 */
+    color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; /* タッチ操作の最適化 */
+    user-select: none; /* テキスト選択の無効化 */
+    -webkit-user-select: none;
+  }
+
+  /* アプリコンテナ */
+  #app {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* HUD (Head-Up Display) */
+  #hud {
+    padding: 12px 16px 8px;
+    background: #16203a; /* HUDの背景色 */
+  }
+  #stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 18px;
+    font-weight: bold;
+  }
+  #instructionBox {
+    margin-top: 8px;
+    padding: 10px;
+    text-align: center;
+    background: #ffd54a; /* 指示ボックスの背景色（黄色） */
+    color: #3a2a00; /* 指示ボックスの文字色 */
+    border-radius: 12px;
+    font-size: 22px;
+    font-weight: bold;
+  }
+
+  /* ゲームフィールド */
+  #field {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #2a3a5a; /* フィールドの背景色 */
+    cursor: pointer; /* タップ可能であることを示すカーソル */
+  }
+
+  /* 中心ターゲット円 */
+  #centerTarget {
+    position: absolute;
+    width: 120px; /* 直径120px */
+    height: 120px;
+    border: 4px solid #ffd54a; /* 黄色のボーダー */
+    border-radius: 50%;
+    background: rgba(255, 213, 74, 0.1); /* 半透明の背景 */
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%); /* 中央配置 */
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 24px;
+    color: #ffd54a;
+    font-weight: bold;
+  }
+
+  /* 移動するターゲット */
+  .moving-target {
+    position: absolute;
+    width: 60px; /* 直径60px */
+    height: 60px;
+    background: #00bcd4; /* シアン系の色 */
+    border-radius: 50%;
+    z-index: 2;
+  }
+
+  /* タップ結果フィードバック */
+  .feedback {
+    position: absolute;
+    font-size: 26px;
+    font-weight: bold;
+    pointer-events: none; /* クリックイベントを無効化し、下の要素に届かせる */
+    animation: rise .6s ease-out forwards;
+    z-index: 10;
+    white-space: nowrap; /* テキストが改行されないように */
+    transform: translateX(-50%); /* 中央揃え */
+  }
+  .feedback.good { color: #7dffa0; } /* 成功時の色（緑） */
+  .feedback.bad { color: #ff7d7d; } /* 失敗時の色（赤） */
+  @keyframes rise {
+    to { transform: translate(-50%, -40px); opacity: 0; } /* 上に移動しながらフェードアウト */
+  }
+
+  /* オーバーレイ (ゲーム開始/終了画面) */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(10,16,32,.94); /* 半透明の暗い背景 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    z-index: 10;
+  }
+  #overlay h1 {
+    font-size: 28px;
+    margin: 0 0 16px;
+  }
+  #overlay p {
+    font-size: 17px;
+    line-height: 1.7;
+    margin: 4px 0;
+    max-width: 320px;
+  }
+  #overlay .big {
+    font-size: 42px;
+    font-weight: bold;
+    color: #ffd54a; /* 黄色 */
+    margin: 8px 0;
+  }
+
+  /* ボタン */
+  button {
+    margin-top: 24px;
+    padding: 16px 40px;
+    font-size: 22px;
+    font-weight: bold;
+    color: #3a2a00;
+    background: #ffd54a;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+  }
+  button:active {
+    transform: scale(.96); /* ボタン押下時のエフェクト */
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats"><span>スコア <span id="score">0</span></span><span>のこり <span id="time">45</span>秒</span></div>
+    <div id="instructionBox">ターゲットが中心円に合わさったらタップ！</div>
+  </div>
+  <div id="field">
+    <div id="centerTarget">🎯</div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">ぴったりタップ</h1>
+    <div id="ovBody">
+      <p>画面の端から動くターゲットが、</p>
+      <p>中心の<b>🎯円に合わさる瞬間</b>にタップ！</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var GAME_SECONDS = 45; // 制限時間（秒）
+  var PERFECT_HIT_WINDOW = 100; // 判定許容範囲（ミリ秒）
+  var TARGET_RADIUS = 30; // 移動ターゲットの半径
+  var CENTER_TARGET_RADIUS = 60; // 中心ターゲットの半径
+  var SCORE_GOOD = 100; // 成功時のスコア
+  var SCORE_BAD = -50; // 失敗時のスコア
+
+  // DOM要素の取得
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var timeEl = document.getElementById("time");
+  var instructionBox = document.getElementById("instructionBox"); // 指示ボックス（今回は固定メッセージ）
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+  var centerTargetEl = document.getElementById("centerTarget");
+
+  // ゲーム状態変数
+  var score = 0;
+  var timeLeft = 0;
+  var running = false; // ゲームが実行中か
+  var clockInterval = null; // 制限時間のsetIntervalID
+  var activeTarget = null; // 現在移動中のターゲットオブジェクトを保持
+
+  // ベストスコアの読み込み
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("perfecttap_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  // ベストスコアの保存
+  function saveBest(v) {
+    try { localStorage.setItem("perfecttap_best", String(v)); } catch (e) {}
+  }
+
+  // スコアの更新
+  function setScore(v) {
+    score = v;
+    scoreEl.textContent = String(score);
+  }
+
+  // フィードバック表示（GOOD! / MISS! など）
+  function showFeedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "feedback " + cls;
+    f.textContent = text;
+    // フィードバックテキストの中央が指定座標に来るように調整
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 650); // 0.65秒後に削除
+  }
+
+  // ターゲットが中心に到達する予定時刻を計算
+  function calculateArrivalTime(startX, startY, endX, endY, speedPxPerMs) {
+    var dx = endX - startX;
+    var dy = endY - startY;
+    var distance = Math.sqrt(dx * dx + dy * dy);
+    return Date.now() + (distance / speedPxPerMs); // 現在時刻 + (距離 / 速度) で到達予定時刻
+  }
+
+  // ターゲットを生成しアニメーションを開始
+  function spawnTarget() {
+    if (!running) return;
+
+    // 前のターゲットがまだ画面上に存在する場合、タップされずに時間切れとみなしミスにする
+    if (activeTarget) {
+      handleTap(false); // タップなしのミス
+      if (!running) return; // endGameでrunningがfalseになる可能性があるので再度チェック
+    }
+
+    var fieldRect = field.getBoundingClientRect();
+    var center = { x: fieldRect.width / 2, y: fieldRect.height / 2 };
+
+    // 開始位置をランダムに決定（画面外から）
+    var startX, startY;
+    var edge = Math.floor(Math.random() * 4); // 0:上, 1:右, 2:下, 3:左
+    // ターゲットが完全に画面外から現れるように半径分オフセット
+    switch (edge) {
+      case 0: // 上
+        startX = Math.random() * fieldRect.width;
+        startY = -TARGET_RADIUS * 2;
+        break;
+      case 1: // 右
+        startX = fieldRect.width + TARGET_RADIUS * 2;
+        startY = Math.random() * fieldRect.height;
+        break;
+      case 2: // 下
+        startX = Math.random() * fieldRect.width;
+        startY = fieldRect.height + TARGET_RADIUS * 2;
+        break;
+      case 3: // 左
+        startX = -TARGET_RADIUS * 2;
+        startY = Math.random() * fieldRect.height;
+        break;
+    }
+
+    // 速度を不規則に設定 (ピクセル/ミリ秒)
+    var speedPxPerSec = (Math.random() * 0.8 + 0.4) * 180; // 0.4*180=72px/s から 1.2*180=216px/s
+    var speedPxPerMs = speedPxPerSec / 1000;
+
+    var arrivalTime = calculateArrivalTime(startX, startY, center.x, center.y, speedPxPerMs);
+
+    var targetEl = document.createElement("div");
+    targetEl.className = "moving-target";
+    // スタイルをターゲットの中心座標基準で設定
+    targetEl.style.left = (startX - TARGET_RADIUS) + "px";
+    targetEl.style.top = (startY - TARGET_RADIUS) + "px";
+    field.appendChild(targetEl);
+
+    // 現在のターゲット情報を保持
+    activeTarget = {
+      el: targetEl,
+      startX: startX,
+      startY: startY,
+      endX: center.x,
+      endY: center.y,
+      speedPxPerMs: speedPxPerMs,
+      arrivalTime: arrivalTime,
+      startTime: Date.now(),
+      missed: false // 既に判定済みか
+    };
+
+    // ターゲットアニメーション
+    function animateTarget() {
+      // 現在のアクティブターゲットでなければ、このアニメーションは停止
+      if (!activeTarget || activeTarget.el !== targetEl) return;
+
+      var currentTime = Date.now();
+      var elapsedMs = currentTime - activeTarget.startTime;
+      var totalDistance = Math.sqrt(
+        Math.pow(activeTarget.endX - activeTarget.startX, 2) +
+        Math.pow(activeTarget.endY - activeTarget.startY, 2)
+      );
+      var travelDistance = elapsedMs * activeTarget.speedPxPerMs; // 移動した距離（ピクセル）
+
+      if (travelDistance >= totalDistance + TARGET_RADIUS * 2) { // ターゲットが中心を通り過ぎて完全に画面外に出た
+        if (!activeTarget.missed) {
+          handleTap(false); // タップなしのミス
+        }
+        removeTarget(activeTarget);
+        if (running) {
+          setTimeout(spawnTarget, Math.random() * 500 + 500); // 次のターゲットを0.5〜1秒後に生成
+        }
+        return;
+      }
+
+      var progress = travelDistance / totalDistance;
+      var currentX = activeTarget.startX + (activeTarget.endX - activeTarget.startX) * progress;
+      var currentY = activeTarget.startY + (activeTarget.endY - activeTarget.startY) * progress;
+
+      // ターゲットの表示位置を更新
+      activeTarget.el.style.left = (currentX - TARGET_RADIUS) + "px";
+      activeTarget.el.style.top = (currentY - TARGET_RADIUS) + "px";
+
+      requestAnimationFrame(animateTarget); // 次のフレームでアニメーションを継続
+    }
+    requestAnimationFrame(animateTarget);
+  }
+
+  // ターゲットをDOMから削除
+  function removeTarget(targetObj) {
+    if (targetObj && targetObj.el && targetObj.el.parentNode) {
+      targetObj.el.parentNode.removeChild(targetObj.el);
+    }
+    if (activeTarget === targetObj) {
+      activeTarget = null;
+    }
+  }
+
+  // フィールド全体のタップイベントハンドラ
+  field.addEventListener("pointerdown", function (ev) {
+    ev.preventDefault(); // デフォルトのイベント（スクロールなど）を防ぐ
+    if (!running || !activeTarget || activeTarget.missed) return; // ゲーム中、かつアクティブなターゲットがあり、まだ判定されてない場合のみ処理
+
+    var tapTime = Date.now();
+    handleTap(true, tapTime); // タップによる判定
+  });
+
+  // タップ（またはタップなし）の判定ロジック
+  function handleTap(isTap, tapTime = 0) {
+    if (!activeTarget || activeTarget.missed) return; // 既に処理済みか、ターゲットがない
+
+    activeTarget.missed = true; // このターゲットはこれで判定済み
+
+    var diff = 0; // タップ時刻と到達予定時刻の差
+    if (isTap) {
+      diff = tapTime - activeTarget.arrivalTime;
+    } else { // タップなしで時間切れ（中心を通り過ぎた）の場合
+      diff = activeTarget.arrivalTime - Date.now() - PERFECT_HIT_WINDOW - 1; // 許容範囲外の「LATE!」判定として扱う
+      // または、シンプルに大きな負の値にして「MISS!」とする
+      // diff = PERFECT_HIT_WINDOW + 1; // 許容範囲外の「FAST!」判定として扱う
+    }
+
+    var feedbackX, feedbackY;
+    // フィードバックの表示位置を決定
+    if (activeTarget && activeTarget.el && isTap) { // タップされた場合、ターゲットの現在の位置からフィードバック
+      var targetElRect = activeTarget.el.getBoundingClientRect();
+      feedbackX = targetElRect.left + TARGET_RADIUS;
+      feedbackY = targetElRect.top + TARGET_RADIUS;
+    } else { // 通り過ぎた場合、中心点からフィードバック
+      var fieldRect = field.getBoundingClientRect();
+      feedbackX = fieldRect.width / 2;
+      feedbackY = fieldRect.height / 2;
+    }
+
+    // 判定とスコア更新、フィードバック表示
+    if (Math.abs(diff) <= PERFECT_HIT_WINDOW) {
+      setScore(score + SCORE_GOOD);
+      showFeedback(feedbackX, feedbackY, "GOOD!", "good");
+    } else {
+      setScore(score + SCORE_BAD);
+      var feedbackText = "MISS!";
+      if (diff < -PERFECT_HIT_WINDOW) {
+        feedbackText = "FAST!"; // 早すぎた
+      } else if (diff > PERFECT_HIT_WINDOW) {
+        feedbackText = "LATE!"; // 遅すぎた
+      }
+      showFeedback(feedbackX, feedbackY, feedbackText, "bad");
+    }
+
+    removeTarget(activeTarget); // ターゲットを削除
+
+    // ゲームが続行中なら次のターゲットを生成
+    if (running) {
+      setTimeout(spawnTarget, Math.random() * 500 + 500); // 0.5〜1秒後に次のターゲットを生成
+    }
+  }
+
+  // 1秒ごとのタイマー処理
+  function tick() {
+    timeLeft -= 1;
+    timeEl.textContent = String(Math.max(0, timeLeft)); // 0以下にはならないように表示
+    if (timeLeft <= 0) {
+      endGame(); // 制限時間切れでゲーム終了
+      return;
+    }
+  }
+
+  // ゲーム開始処理
+  function startGame() {
+    field.innerHTML = ""; // フィールドをクリア
+    field.appendChild(centerTargetEl); // 中心ターゲットを再配置
+    setScore(0); // スコアをリセット
+    timeLeft = GAME_SECONDS; // 残り時間を設定
+    timeEl.textContent = String(timeLeft);
+    overlay.style.display = "none"; // オーバーレイを非表示に
+    running = true; // ゲーム実行中に設定
+    activeTarget = null; // アクティブターゲットをリセット
+    clearInterval(clockInterval); // 既存のタイマーがあればクリア
+    clockInterval = setInterval(tick, 1000); // 1秒ごとのタイマーを開始
+    spawnTarget(); // 最初のターゲットを生成
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false; // ゲーム停止
+    // 終了時にアクティブなターゲットがあれば削除
+    if (activeTarget) {
+      removeTarget(activeTarget);
+    }
+    clearInterval(clockInterval); // タイマーを停止
+
+    // ベストスコアを更新
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+
+    // オーバーレイに結果を表示
+    ovTitle.textContent = "タイムアップ!";
+    ovBody.innerHTML =
+      '<p>あなたのスコア</p><div class="big">' + score + '点</div>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? "(新記録!)" : "") + '</p>';
+    startBtn.textContent = "もういちど"; // ボタンをリトライ用に変更
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  // スタートボタンにイベントリスナーを設定
+  startBtn.addEventListener("click", startGame);
+
+  // 初期化時に中心ターゲットのサイズをCSS変数に合わせて調整
+  centerTargetEl.style.width = (CENTER_TARGET_RADIUS * 2) + "px";
+  centerTargetEl.style.height = (CENTER_TARGET_RADIUS * 2) + "px";
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

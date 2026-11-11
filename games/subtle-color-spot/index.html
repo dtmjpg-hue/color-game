@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>色違い探しゲーム</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #e0f2f7; /* 明るい水色の背景 */
+            color: #333;
+            overflow: hidden; /* スクロールバーが表示されないようにする */
+            -webkit-touch-callout: none; /* iOS Safariで長押しメニューを無効化 */
+            -webkit-user-select: none;   /* iOS Safariでテキスト選択を無効化 */
+            -moz-user-select: none;      /* Firefoxでテキスト選択を無効化 */
+            -ms-user-select: none;       /* IE/Edgeでテキスト選択を無効化 */
+            user-select: none;           /* 標準でテキスト選択を無効化 */
+        }
+
+        #game-container {
+            width: 90%;
+            max-width: 500px; /* 大画面での横幅を制限 */
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+            background-color: #ffffff;
+            border-radius: 15px;
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        h1 {
+            color: #007bff;
+            margin-bottom: 15px;
+            font-size: 1.8em;
+        }
+
+        h2 {
+            color: #007bff;
+            margin-bottom: 15px;
+            font-size: 1.6em;
+        }
+
+        p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin-bottom: 20px;
+        }
+
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            -webkit-tap-highlight-color: transparent; /* モバイルでのタップ時のハイライトを無効化 */
+            margin-top: 10px;
+        }
+
+        button:hover {
+            background-color: #0056b3;
+        }
+
+        #score-area {
+            font-size: 1.2em;
+            margin-bottom: 20px;
+            color: #555;
+            display: flex;
+            justify-content: space-around;
+            flex-wrap: wrap; /* 小さい画面で折り返す */
+            gap: 10px; /* 要素間のスペース */
+        }
+
+        #score-area span {
+            font-weight: bold;
+            color: #007bff;
+        }
+        
+        #score-area div {
+            padding: 5px 10px;
+        }
+
+        #grid-container {
+            display: grid;
+            gap: 5px; /* セル間のスペース */
+            margin-top: 20px;
+            width: 100%;
+            /* --grid-cols はJavaScriptで設定されます */
+            grid-template-columns: repeat(var(--grid-cols), 1fr);
+        }
+
+        .grid-item {
+            width: 100%;
+            height: 0; /* heightを0に設定 */
+            padding-bottom: 100%; /* widthに合わせて正方形になるように設定 */
+            border: 1px solid rgba(0, 0, 0, 0.1);
+            box-sizing: border-box;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            border-radius: 5px; /* セルを少し角丸にする */
+            background-color: var(--cell-color); /* JavaScriptで設定される色 */
+            transition: transform 0.1s ease-out; /* タップ時のアニメーション */
+            position: relative; /* 子要素の配置用 */
+        }
+
+        .grid-item:active {
+            transform: scale(0.95); /* タップ時に少し縮む */
+        }
+
+        /* レスポンシブ調整 */
+        @media (max-width: 400px) {
+            #game-container {
+                padding: 15px;
+            }
+            h1 {
+                font-size: 1.5em;
+            }
+            p {
+                font-size: 1em;
+            }
+            button {
+                padding: 10px 20px;
+                font-size: 1.1em;
+            }
+            #score-area {
+                font-size: 1.1em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="start-screen">
+            <h1>色違い探しゲーム</h1>
+            <p>たくさんの四角の中から、<br><strong>一つだけ微妙に色味が違うもの</strong>を見つけてタップしてください。</p>
+            <p>制限時間内に、どれだけ多くの色違いを見つけられるかな？</p>
+            <button id="start-button">スタート</button>
+        </div>
+
+        <div id="game-screen" style="display: none;">
+            <div id="score-area">
+                <div>スコア: <span id="score">0</span></div>
+                <div>残り時間: <span id="time">30</span>秒</div>
+            </div>
+            <div id="grid-container"></div>
+        </div>
+
+        <div id="result-screen" style="display: none;">
+            <h2>ゲーム終了！</h2>
+            <p>最終スコア: <span id="final-score">0</span></p>
+            <button id="retry-button">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <script>
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const resultScreen = document.getElementById('result-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const scoreDisplay = document.getElementById('score');
+        const timeDisplay = document.getElementById('time');
+        const finalScoreDisplay = document.getElementById('final-score');
+        const gridContainer = document.getElementById('grid-container');
+
+        let score = 0;
+        let timeRemaining = 30; // 制限時間
+        let timer;
+        let gameActive = false;
+        let level = 1; // 難易度レベル
+
+        // HSLカラーを生成する関数
+        // ベースカラーと微妙に異なるカラーを生成
+        function generateHslColors() {
+            const hue = Math.floor(Math.random() * 360); // 色相 (0-359)
+            const saturation = Math.floor(Math.random() * 40) + 60; // 彩度 (60-99%)
+            let lightness = Math.floor(Math.random() * 40) + 30; // 明度 (30-69%) - 暗すぎず明るすぎない範囲
+
+            const baseColor = `hsl(${hue}, ${saturation}%, ${lightness}%)`;
+
+            let diffAmount;
+            let diffLightness;
+
+            // ベースカラーと異なるカラーが確実に異なるようにループ
+            do {
+                // 明度の微調整量 (+/- 3〜7)
+                diffAmount = (Math.random() < 0.5 ? 1 : -1) * (Math.floor(Math.random() * 5) + 3);
+                diffLightness = Math.max(0, Math.min(100, lightness + diffAmount)); // 0-100%の範囲にクランプ
+            } while (lightness === diffLightness); // 明度が同じになったら再生成
+
+            const differentColor = `hsl(${hue}, ${saturation}%, ${diffLightness}%)`;
+            
+            return { baseColor, differentColor };
+        }
+
+        // 現在のレベルに応じてグリッドサイズを決定する関数
+        function getGridSize(currentLevel) {
+            if (currentLevel < 5) return 3; // レベル1-4: 3x3
+            if (currentLevel < 10) return 4; // レベル5-9: 4x4
+            if (currentLevel < 15) return 5; // レベル10-14: 5x5
+            return 6; // レベル15以降: 6x6
+        }
+
+        // グリッドを生成する関数
+        function createGrid() {
+            if (!gameActive) return; // ゲームがアクティブでない場合は生成しない
+
+            const gridSize = getGridSize(level); // 現在のレベルに応じたグリッドサイズ
+            const totalCells = gridSize * gridSize;
+            gridContainer.innerHTML = ''; // 前のグリッドをクリア
+            gridContainer.style.setProperty('--grid-cols', gridSize); // CSS変数でグリッド列数を設定
+
+            const colors = generateHslColors(); // ベースカラーと異なるカラーを生成
+            const differentIndex = Math.floor(Math.random() * totalCells); // 異なるカラーを配置するランダムな位置
+
+            for (let i = 0; i < totalCells; i++) {
+                const cell = document.createElement('div');
+                cell.classList.add('grid-item');
+                if (i === differentIndex) {
+                    cell.style.setProperty('--cell-color', colors.differentColor);
+                    cell.dataset.isDifferent = 'true'; // 異なるセルであることをマーク
+                } else {
+                    cell.style.setProperty('--cell-color', colors.baseColor);
+                    cell.dataset.isDifferent = 'false';
+                }
+                cell.addEventListener('click', handleCellClick); // クリックイベントリスナーを設定
+                gridContainer.appendChild(cell);
+            }
+        }
+
+        // セルがクリックされたときの処理
+        function handleCellClick(event) {
+            if (!gameActive) return;
+
+            if (event.target.dataset.isDifferent === 'true') {
+                score += 100; // 正解で100点加算
+                scoreDisplay.textContent = score;
+                level++; // レベルアップ
+                createGrid(); // 次のグリッド（問題）を生成
+            } else {
+                // 不正解の場合は何も起きない（ペナルティなし）
+            }
+        }
+
+        // ゲーム開始処理
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameScreen.style.display = 'block';
+            resultScreen.style.display = 'none';
+
+            score = 0;
+            timeRemaining = 30;
+            level = 1; // レベルをリセット
+            scoreDisplay.textContent = score;
+            timeDisplay.textContent = timeRemaining;
+            gameActive = true;
+
+            createGrid(); // 最初のグリッドを生成
+            startTimer(); // タイマーを開始
+        }
+
+        // タイマー開始処理
+        function startTimer() {
+            clearInterval(timer); // 既存のタイマーがあればクリア
+            timer = setInterval(() => {
+                timeRemaining--;
+                timeDisplay.textContent = timeRemaining;
+
+                if (timeRemaining <= 0) {
+                    endGame(); // 時間がなくなったらゲーム終了
+                }
+            }, 1000); // 1秒ごとに更新
+        }
+
+        // ゲーム終了処理
+        function endGame() {
+            gameActive = false;
+            clearInterval(timer); // タイマーを停止
+            gameScreen.style.display = 'none';
+            resultScreen.style.display = 'block';
+            finalScoreDisplay.textContent = score; // 最終スコアを表示
+        }
+
+        // ゲームリセット（再挑戦）処理
+        function resetGame() {
+            startGame(); // ゲームをリセットして再開
+        }
+
+        // イベントリスナーの登録
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', resetGame);
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

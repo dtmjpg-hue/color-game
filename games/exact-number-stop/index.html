@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ピタッとストップ！</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh; /* 画面全体を使う */
+            margin: 0;
+            background-color: #f0f8ff;
+            color: #333;
+            user-select: none; /* テキスト選択を無効化 */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+            overflow: hidden; /* スクロールバーを非表示 */
+        }
+
+        .screen {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            width: 90%;
+            max-width: 400px; /* スマホ縦画面での最大幅を考慮 */
+            padding: 20px;
+            box-sizing: border-box;
+            background-color: #fff;
+            border-radius: 15px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+            text-align: center;
+            min-height: 400px; /* 各画面の最低高さを確保 */
+        }
+
+        h1 {
+            color: #007bff;
+            margin-bottom: 20px;
+            font-size: 2.2em;
+        }
+
+        p {
+            font-size: 1.1em;
+            line-height: 1.6;
+            margin-bottom: 15px;
+        }
+
+        .button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            margin-top: 20px;
+            border-radius: 30px;
+            font-size: 1.3em;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            box-shadow: 0 4px 10px rgba(0, 123, 255, 0.3);
+            width: 80%; /* ボタン幅を調整 */
+            max-width: 250px;
+        }
+
+        .button:active {
+            transform: scale(0.98);
+            background-color: #0056b3;
+        }
+
+        #target-number-display, #current-number-display {
+            font-size: 3.5em;
+            font-weight: bold;
+            margin: 15px 0;
+            color: #28a745; /* 目標数字 */
+            width: 100%;
+        }
+
+        #current-number-display {
+            color: #dc3545; /* カウントアップ数字 */
+            min-height: 1.5em; /* 数字が変わってもレイアウトが崩れないように */
+        }
+
+        #tap-area {
+            background-color: #ffc107; /* 黄色で目立つように */
+            color: #333;
+            border-radius: 10px;
+            margin-top: 25px;
+            width: calc(100% - 40px); /* 左右に少し余白 */
+            height: 150px; /* タップしやすい高さ */
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.8em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease, transform 0.1s ease;
+            box-shadow: 0 4px 10px rgba(255, 193, 7, 0.4);
+        }
+
+        #tap-area:active {
+            transform: scale(0.98);
+            background-color: #e0a800;
+        }
+
+        #result-screen h2 {
+            font-size: 2em;
+            color: #007bff;
+            margin-bottom: 10px;
+        }
+
+        #result-score-display {
+            font-size: 4em;
+            font-weight: bold;
+            color: #28a745;
+            margin-bottom: 30px;
+        }
+
+        /* Responsive adjustments for smaller screens if needed */
+        @media (max-width: 320px) {
+            h1 {
+                font-size: 1.8em;
+            }
+            .button {
+                font-size: 1.1em;
+                padding: 12px 25px;
+            }
+            #target-number-display, #current-number-display {
+                font-size: 3em;
+            }
+            #tap-area {
+                font-size: 1.5em;
+                height: 120px;
+            }
+            #result-score-display {
+                font-size: 3.5em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="intro-screen" class="screen">
+        <h1>ピタッとストップ！</h1>
+        <p id="instructions-text">
+            カウントアップする数字を、目標の数字にピッタリ合うようにタップで止めましょう。<br>
+            誤差が少ないほど高得点です！
+        </p>
+        <button id="start-button" class="button">ゲームスタート</button>
+    </div>
+
+    <div id="game-screen" class="screen" style="display: none;">
+        <p style="font-size: 1.2em; margin-bottom: 5px;">目標の数字:</p>
+        <div id="target-number-display"></div>
+        <p style="font-size: 1.2em; margin-top: 20px; margin-bottom: 5px;">現在の数字:</p>
+        <div id="current-number-display">0</div>
+        <div id="tap-area">ここをタップしてストップ！</div>
+    </div>
+
+    <div id="result-screen" class="screen" style="display: none;">
+        <h2>結果発表！</h2>
+        <p style="font-size: 1.2em;">あなたのスコア:</p>
+        <div id="result-score-display">0</div>
+        <button id="retry-button" class="button">もう一度遊ぶ</button>
+    </div>
+
+    <script>
+        // DOM要素の取得
+        const introScreen = document.getElementById('intro-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const resultScreen = document.getElementById('result-screen');
+
+        const startButton = document.getElementById('start-button');
+        const targetNumberDisplay = document.getElementById('target-number-display');
+        const currentNumberDisplay = document.getElementById('current-number-display');
+        const tapArea = document.getElementById('tap-area');
+        const resultScoreDisplay = document.getElementById('result-score-display');
+        const retryButton = document.getElementById('retry-button');
+
+        // ゲームの状態変数
+        let currentNumber = 0;
+        let targetNumber = 0;
+        let gameInterval = null;
+        let isGameRunning = false;
+
+        /**
+         * 指定されたIDの画面を表示し、他の画面を非表示にする
+         * @param {string} screenId 表示する画面のID (例: 'intro-screen')
+         */
+        function showScreen(screenId) {
+            introScreen.style.display = 'none';
+            gameScreen.style.display = 'none';
+            resultScreen.style.display = 'none';
+
+            document.getElementById(screenId).style.display = 'flex';
+        }
+
+        /**
+         * ゲームを開始する
+         */
+        function startGame() {
+            currentNumber = 0;
+            // 目標数字を10から50の間でランダムに設定
+            targetNumber = Math.floor(Math.random() * 41) + 10; 
+            
+            targetNumberDisplay.textContent = targetNumber;
+            currentNumberDisplay.textContent = currentNumber;
+            
+            showScreen('game-screen');
+            isGameRunning = true;
+
+            // 50ミリ秒ごとに数字をカウントアップ
+            gameInterval = setInterval(() => {
+                currentNumber++;
+                currentNumberDisplay.textContent = currentNumber;
+            }, 50);
+        }
+
+        /**
+         * ゲームを停止し、スコアを計算・表示する
+         */
+        function stopGame() {
+            if (!isGameRunning) return; // ゲームが実行中でなければ何もしない
+
+            clearInterval(gameInterval);
+            isGameRunning = false;
+
+            const difference = Math.abs(currentNumber - targetNumber);
+            // 誤差が0なら100点、誤差が10以上なら0点
+            const score = Math.max(0, 100 - (difference * 10)); 
+
+            resultScoreDisplay.textContent = score;
+            showScreen('result-screen');
+        }
+
+        /**
+         * ゲームをリセットし、イントロ画面に戻る
+         */
+        function resetGame() {
+            currentNumber = 0;
+            targetNumber = 0;
+            if (gameInterval) clearInterval(gameInterval);
+            isGameRunning = false;
+            showScreen('intro-screen');
+        }
+
+        // イベントリスナーの設定
+        startButton.addEventListener('click', startGame);
+        tapArea.addEventListener('click', stopGame);
+        retryButton.addEventListener('click', resetGame);
+
+        // ページ読み込み時にイントロ画面を表示
+        document.addEventListener('DOMContentLoaded', () => {
+            showScreen('intro-screen');
+        });
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

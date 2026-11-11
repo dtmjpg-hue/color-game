@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>重力ドット</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #eee;
+            /* テキスト選択、長押しメニューなどを防止 */
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            /* ピンチズームやスクロール防止 */
+            touch-action: manipulation; 
+        }
+        #game-container {
+            position: relative;
+            width: 100vw; /* 画面幅いっぱいに */
+            height: 100vh; /* 画面高さいっぱいに */
+            max-width: 600px; /* PCでの表示上限 */
+            max-height: 1000px; /* PCでの表示上限 */
+            aspect-ratio: 9 / 16; /* 縦長スマホの比率に合わせる */
+            background-color: #000;
+            overflow: hidden; /* コンテナからはみ出す要素を非表示に */
+            display: flex; /* UI要素を中央に配置するため */
+            justify-content: center;
+            align-items: center;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%; /* 親要素(game-container)にフィット */
+            height: 100%; /* 親要素(game-container)にフィット */
+            display: block;
+            touch-action: manipulation;
+        }
+        .ui-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 10;
+        }
+        .ui-screen h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            color: #4CAF50; /* 緑 */
+        }
+        .ui-screen p {
+            font-size: 1.2em;
+            margin-bottom: 30px;
+            line-height: 1.5;
+            color: #ccc;
+            padding: 0 20px;
+        }
+        .ui-screen button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            cursor: pointer;
+            background-color: #4CAF50; /* 緑 */
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+            transition: background-color 0.3s ease;
+        }
+        .ui-screen button:active {
+            background-color: #45a049;
+        }
+        #game-ui {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 2em;
+            color: #fff;
+            z-index: 5;
+            display: none; /* ゲーム中は表示、それ以外は非表示 */
+        }
+        #game-over-screen h1 {
+            color: #F44336; /* 赤 */
+        }
+        #game-over-screen p {
+            font-size: 1.5em;
+            margin-bottom: 20px;
+            color: #eee;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="start-screen" class="ui-screen">
+            <h1>重力ドット</h1>
+            <p>画面内を漂う点を、中央の危険ラインに触れないように誘導し続けましょう。<br>画面をタップすると重力が反転します。時間経過でスコアが増えます。</p>
+            <button id="startButton">スタート</button>
+        </div>
+
+        <div id="game-ui">
+            SCORE: <span id="scoreDisplay">0</span>
+        </div>
+
+        <canvas id="game-canvas"></canvas>
+
+        <div id="game-over-screen" class="ui-screen" style="display: none;">
+            <h1>GAME OVER!</h1>
+            <p>あなたのスコア: <span id="finalScoreDisplay">0</span></p>
+            <button id="retryButton">リトライ</button>
+        </div>
+    </div>
+
+    <script>
+        const gameContainer = document.getElementById('game-container');
+        const canvas = document.getElementById('game-canvas');
+        const ctx = canvas.getContext('2d');
+        const startScreen = document.getElementById('start-screen');
+        const gameUi = document.getElementById('game-ui');
+        const scoreDisplay = document.getElementById('scoreDisplay');
+        // 問題点1: IDがHTMLとJSで異なっていたため修正
+        const gameOverScreen = document.getElementById('game-over-screen'); 
+        const finalScoreDisplay = document.getElementById('finalScoreDisplay');
+        const startButton = document.getElementById('startButton');
+        const retryButton = document.getElementById('retryButton');
+
+        let gameState = 'startScreen'; // 'startScreen', 'playing', 'gameOver'
+        let score = 0;
+        let player = { x: 0, y: 0, radius: 0, velocityY: 0, gravity: 0 };
+        let dangerLineY = 0;
+        let animationFrameId = null;
+        let lastFrameTime = 0;
+
+        // ゲーム定数 (調整可能)
+        const BASE_GRAVITY = 0.1; // 基本となる重力の強さ
+        const PLAYER_RADIUS_RATIO = 0.03; // 画面幅に対するプレイヤー半径の比率
+        const DANGER_LINE_WIDTH = 10; // 危険ラインの太さ
+        const BOUNCE_FACTOR = 0.7; // 壁に当たった時の速度減衰率
+
+        function resizeCanvas() {
+            // game-containerのクライアントサイズに合わせてcanvasのサイズを設定
+            canvas.width = gameContainer.clientWidth;
+            canvas.height = gameContainer.clientHeight;
+            
+            player.radius = canvas.width * PLAYER_RADIUS_RATIO;
+            dangerLineY = canvas.height / 2;
+
+            // ゲーム中またはゲームオーバー時に画面サイズが変わったらプレイヤーの位置を調整
+            if (gameState === 'playing' || gameState === 'gameOver') {
+                player.x = canvas.width / 2; // X位置は常に中央
+                if (player.y - player.radius < 0) player.y = player.radius;
+                if (player.y + player.radius > canvas.height) player.y = canvas.height - player.radius;
+            } else {
+                // スタート画面などゲーム開始前は初期位置にリセット
+                initPlayerPosition(); 
+            }
+        }
+
+        function initPlayerPosition() {
+            player.x = canvas.width / 2;
+            player.y = canvas.height / 4; // 初期位置を少し上に設定
+        }
+
+        function initGame() {
+            score = 0;
+            scoreDisplay.textContent = score;
+            initPlayerPosition();
+            player.velocityY = 0;
+            player.gravity = BASE_GRAVITY; // 初期重力は下向き
+            
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId);
+            }
+            gameState = 'playing';
+            lastFrameTime = performance.now(); // ゲーム開始時のタイムスタンプを記録
+            gameLoop();
+        }
+
+        function startGame() {
+            showScreen('playing');
+            initGame();
+        }
+
+        function gameOver() {
+            gameState = 'gameOver';
+            cancelAnimationFrame(animationFrameId);
+            finalScoreDisplay.textContent = score;
+            showScreen('gameOver');
+        }
+
+        function handleTap() {
+            if (gameState === 'playing') {
+                player.gravity *= -1; // 重力方向を反転
+            }
+        }
+
+        function draw() {
+            // 背景をクリア (canvasは黒背景なのでclearRectは不要だが、念のため)
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            // 危険ラインを描画
+            ctx.fillStyle = '#F44336'; // 赤色
+            ctx.fillRect(0, dangerLineY - DANGER_LINE_WIDTH / 2, canvas.width, DANGER_LINE_WIDTH);
+
+            // プレイヤーを描画
+            ctx.fillStyle = '#f0f'; // マゼンタ色
+            ctx.beginPath();
+            ctx.arc(player.x, player.y, player.radius, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        function update(currentTime) {
+            // デルタタイムを計算 (フレームレートのばらつきを吸収)
+            const deltaTime = (currentTime - lastFrameTime) / (1000 / 60); // 60fpsを基準としたスケール
+            lastFrameTime = currentTime;
+
+            // 速度に重力を加算
+            player.velocityY += player.gravity * deltaTime;
+            // 位置を更新
+            player.y += player.velocityY * deltaTime;
+
+            // 画面の上下端での衝突判定と跳ね返り
+            if (player.y - player.radius < 0) {
+                player.y = player.radius;
+                player.velocityY *= -BOUNCE_FACTOR;
+            }
+            if (player.y + player.radius > canvas.height) {
+                player.y = canvas.height - player.radius;
+                player.velocityY *= -BOUNCE_FACTOR;
+            }
+
+            // 危険ラインとの衝突判定
+            if (player.y - player.radius < dangerLineY + DANGER_LINE_WIDTH / 2 && 
+                player.y + player.radius > dangerLineY - DANGER_LINE_WIDTH / 2) {
+                gameOver();
+                return; // ゲームオーバーになったら以降の処理は不要
+            }
+
+            // スコアを更新 (時間経過で増加)
+            score++;
+            scoreDisplay.textContent = score;
+        }
+
+        function gameLoop(currentTime) {
+            if (gameState !== 'playing') return;
+
+            update(currentTime);
+            draw();
+
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        function showScreen(screenState) {
+            startScreen.style.display = 'none';
+            gameUi.style.display = 'none';
+            // gameOverScreenがnullでないことを確認してからアクセス
+            if (gameOverScreen) { 
+                gameOverScreen.style.display = 'none';
+            }
+
+            if (screenState === 'startScreen') {
+                startScreen.style.display = 'flex';
+            } else if (screenState === 'playing') {
+                gameUi.style.display = 'block';
+            } else if (screenState === 'gameOver') {
+                if (gameOverScreen) {
+                    gameOverScreen.style.display = 'flex';
+                }
+            }
+        }
+
+        // イベントリスナーの設定
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+        canvas.addEventListener('touchstart', handleTap); // スマホでのタップ
+        canvas.addEventListener('click', handleTap);     // PCでのクリック
+
+        window.addEventListener('resize', resizeCanvas); // ウィンドウサイズ変更時にCanvasサイズを調整
+
+        // 初期化
+        resizeCanvas(); // Canvasサイズを調整
+        showScreen('startScreen'); // スタート画面を表示
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>グラデーションタイミングゲーム</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden; /* スマホでのスクロール防止 */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            color: #fff;
+            text-align: center;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: linear-gradient(to bottom, hsl(200, 70%, 80%), hsl(210, 60%, 70%)); /* 初期背景 */
+            -webkit-user-select: none; /* iOS Safari */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* Internet Explorer/Edge */
+            user-select: none; /* Non-prefixed version, currently supported by Chrome, Edge, Opera and Firefox */
+            touch-action: none; /* デフォルトのジェスチャーを完全に無効化 */
+        }
+
+        #game-container {
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            position: relative; /* 子要素のabsolute配置の基準 */
+        }
+
+        #start-screen, #game-screen {
+            position: absolute; /* 画面全体を覆う */
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+        }
+
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        p {
+            font-size: 1.2em;
+            margin: 5px 20px;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.5);
+        }
+
+        button {
+            padding: 15px 30px;
+            font-size: 1.5em;
+            margin-top: 30px;
+            cursor: pointer;
+            background-color: rgba(255, 255, 255, 0.2);
+            color: #fff;
+            border: 2px solid #fff;
+            border-radius: 10px;
+            transition: background-color 0.3s, transform 0.1s;
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        button:active {
+            transform: scale(0.98);
+        }
+
+        #score-display {
+            font-size: 3em;
+            font-weight: bold;
+            text-shadow: 3px 3px 6px rgba(0, 0, 0, 0.7);
+            margin-bottom: 10px;
+        }
+
+        #message-display {
+            font-size: 2em;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.6);
+        }
+
+        /* スコアとメッセージ表示中はタップを受け付けないためのオーバーレイ */
+        #game-overlay {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            top: 0;
+            left: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            background-color: rgba(0, 0, 0, 0.3); /* 半透明のオーバーレイ */
+            z-index: 10; /* 背景よりも手前に表示 */
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <div id="start-screen">
+            <h1>グラデーションタイミングゲーム</h1>
+            <p>背景色が完全に変化しきった瞬間にタップしてください。</p>
+            <p>タイミングよくタップして高スコアを目指しましょう！</p>
+            <button id="startButton">スタート</button>
+        </div>
+
+        <div id="game-screen" style="display: none;">
+            <!-- ゲームプレイ中の背景とタップイベントを扱うためのdiv。この中には直接表示されるコンテンツはなし -->
+        </div>
+
+        <!-- game-overlayをgame-containerの直下に移動し、game-screenとは兄弟要素にする -->
+        <!-- ゲームプレイ中は非表示になり、結果表示時に表示されるオーバーレイ -->
+        <div id="game-overlay" style="display: none;">
+            <div id="score-display">-- ms</div>
+            <div id="message-display"></div>
+            <button id="retryButton" style="display: none;">もう一度</button>
+        </div>
+    </div>
+
+    <script>
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const gameOverlay = document.getElementById('game-overlay');
+        const startButton = document.getElementById('startButton');
+        const scoreDisplay = document.getElementById('score-display');
+        const messageDisplay = document.getElementById('message-display');
+        const retryButton = document.getElementById('retryButton');
+
+        // HSL Color definitions for various transitions
+        const COLOR_SETS = [
+            // 昼から夜
+            { startTop: { h: 200, s: 70, l: 80 }, startBottom: { h: 210, s: 60, l: 70 }, endTop: { h: 240, s: 50, l: 20 }, endBottom: { h: 260, s: 40, l: 10 } },
+            // 夜から昼
+            { startTop: { h: 240, s: 50, l: 20 }, startBottom: { h: 260, s: 40, l: 10 }, endTop: { h: 200, s: 70, l: 80 }, endBottom: { h: 210, s: 60, l: 70 } },
+            // 昼から夕焼け
+            { startTop: { h: 200, s: 70, l: 80 }, startBottom: { h: 210, s: 60, l: 70 }, endTop: { h: 30, s: 80, l: 70 }, endBottom: { h: 15, s: 70, l: 60 } },
+            // 夕焼けから夜
+            { startTop: { h: 30, s: 80, l: 70 }, startBottom: { h: 15, s: 70, l: 60 }, endTop: { h: 280, s: 60, l: 40 }, endBottom: { h: 260, s: 50, l: 30 } }
+        ];
+
+        let currentColors = null;
+        let startTime = 0;
+        let animationDuration = 2500; // 2.5秒でグラデーションが変化
+        let animationFrameId = null;
+        let gameActive = false;
+
+        // HSL色の線形補間関数
+        function interpolateHSL(start, end, progress) {
+            const h = start.h + (end.h - start.h) * progress;
+            const s = start.s + (end.s - start.s) * progress;
+            const l = start.l + (end.l - start.l) * progress;
+            return `hsl(${h}, ${s}%, ${l}%)`;
+        }
+
+        // グラデーションの更新処理
+        function updateGradient() {
+            if (!gameActive) return;
+
+            const currentTime = performance.now();
+            const elapsedTime = currentTime - startTime;
+            let progress = Math.min(elapsedTime / animationDuration, 1);
+
+            const color1 = interpolateHSL(currentColors.startTop, currentColors.endTop, progress);
+            const color2 = interpolateHSL(currentColors.startBottom, currentColors.endBottom, progress);
+            document.body.style.background = `linear-gradient(to bottom, ${color1}, ${color2})`;
+
+            if (progress < 1) {
+                animationFrameId = requestAnimationFrame(updateGradient);
+            } else {
+                // アニメーションが終了してもタップがなければタイムオーバー
+                endGame("タイムオーバー！");
+            }
+        }
+
+        // ゲーム開始処理
+        function startGame() {
+            startScreen.style.display = 'none';
+            gameScreen.style.display = 'flex';
+            gameOverlay.style.display = 'none'; // プレイ中はオーバーレイを非表示
+            scoreDisplay.textContent = '-- ms';
+            messageDisplay.textContent = '';
+            retryButton.style.display = 'none';
+
+            // ランダムにグラデーションのパターンを選択
+            currentColors = COLOR_SETS[Math.floor(Math.random() * COLOR_SETS.length)];
+
+            gameActive = true;
+            startTime = performance.now();
+            animationFrameId = requestAnimationFrame(updateGradient);
+        }
+
+        // ゲーム終了処理
+        function endGame(message = "") {
+            if (!gameActive) return; // 既に終了している場合は何もしない
+
+            cancelAnimationFrame(animationFrameId); // アニメーションを停止
+            gameActive = false;
+
+            const tapTime = performance.now();
+            const targetTime = startTime + animationDuration;
+            const score = Math.abs(tapTime - targetTime);
+
+            gameOverlay.style.display = 'flex'; // 結果表示のためにオーバーレイを表示
+            scoreDisplay.textContent = `${Math.round(score)} ms`;
+            messageDisplay.textContent = getMessage(score, message);
+            retryButton.style.display = 'block';
+
+            // 最終的なグラデーション色に固定
+            const finalColor1 = `hsl(${currentColors.endTop.h}, ${currentColors.endTop.s}%, ${currentColors.endTop.l}%)`;
+            const finalColor2 = `hsl(${currentColors.endBottom.h}, ${currentColors.endBottom.s}%, ${currentColors.endBottom.l}%)`;
+            document.body.style.background = `linear-gradient(to bottom, ${finalColor1}, ${finalColor2})`;
+        }
+
+        // スコアに応じたメッセージを返す関数
+        function getMessage(score, defaultMessage) {
+            if (defaultMessage === "タイムオーバー！") {
+                return defaultMessage;
+            } else if (score <= 10) {
+                return "PERFECT!";
+            } else if (score <= 50) {
+                return "EXCELLENT!";
+            } else if (score <= 150) {
+                return "GOOD!";
+            } else if (score <= 300) {
+                return "FAIR!";
+            } else {
+                return "BAD!";
+            }
+        }
+
+        // イベントリスナーの設定
+        startButton.addEventListener('click', startGame);
+        retryButton.addEventListener('click', startGame);
+
+        // ゲーム画面全体のタップイベント
+        gameScreen.addEventListener('touchstart', (e) => {
+            // ゲームがアクティブで、かつタップされた要素がオーバーレイ上のボタンではない場合のみ処理
+            if (!gameActive || e.target.closest('#game-overlay')) return;
+            endGame();
+        });
+        // デスクトップでのテスト用にmousedownイベントも追加
+        gameScreen.addEventListener('mousedown', (e) => {
+            if (!gameActive || e.target.closest('#game-overlay')) return;
+            endGame();
+        });
+
+        // 初期背景を設定
+        const initialColors = COLOR_SETS[0];
+        document.body.style.background = `linear-gradient(to bottom, hsl(${initialColors.startTop.h}, ${initialColors.startTop.s}%, ${initialColors.startTop.l}%), hsl(${initialColors.startBottom.h}, ${initialColors.startBottom.s}%, ${initialColors.startBottom.l}%))`;
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

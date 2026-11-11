@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>タイムシンクロレース</title>
+    <style>
+        /* 基本的なスタイルリセットとボディ設定 */
+        body {
+            margin: 0;
+            overflow: hidden; /* スクロールを禁止 */
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh; /* 画面全体の高さを確保 */
+            background-color: #f0f0f0;
+            color: #333;
+            /* スマホでの操作性向上 */
+            -webkit-user-select: none; /* iOS Safariでのテキスト選択禁止 */
+            -moz-user-select: none; /* Firefox */
+            -ms-user-select: none; /* Internet Explorer/Edge */
+            user-select: none; /* その他のブラウザ */
+            -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+        }
+
+        /* ゲームコンテナのスタイル */
+        #game-container {
+            position: relative;
+            width: 100vw; /* 画面幅いっぱいに */
+            height: 100vh; /* 画面高さいっぱいに */
+            max-width: 600px; /* PCでの表示用、スマホ縦画面を想定した最大幅 */
+            max-height: 900px; /* スマホ縦画面を想定した最大高さ */
+            background-color: #fff;
+            border: 1px solid #ddd;
+            overflow: hidden;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            transition: background-color 0.3s ease-in-out; /* スローモーション時の背景色変化アニメーション */
+        }
+
+        /* 共通の画面スタイル (スタート、ゲーム、エンド) */
+        .screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            background-color: rgba(255, 255, 255, 0.9);
+            z-index: 100; /* 他の要素より手前に表示 */
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+        }
+
+        .screen h1, .screen h2 {
+            margin-top: 0;
+            color: #4CAF50; /* 緑系の見出し色 */
+        }
+
+        .screen p {
+            margin-bottom: 15px;
+            line-height: 1.6;
+            font-size: 1.1em;
+            max-width: 80%; /* 説明文の幅を制限 */
+        }
+
+        /* ボタンのスタイル */
+        button {
+            padding: 15px 30px;
+            font-size: 1.2em;
+            cursor: pointer;
+            background-color: #4CAF50; /* 緑系のボタン色 */
+            color: white;
+            border: none;
+            border-radius: 8px;
+            box-shadow: 0 4px #388E3C; /* 立体的なボタン */
+            transition: all 0.2s ease;
+            outline: none;
+        }
+
+        button:active {
+            box-shadow: 0 2px #388E3C;
+            transform: translateY(2px); /* クリック時の押し込みアニメーション */
+        }
+
+        /* ゲーム画面のスタイル */
+        #game-screen {
+            background-color: #e0f2f7; /* 明るい水色の背景 */
+            position: relative; /* オブジェクト配置の基準 */
+            z-index: 1;
+        }
+
+        /* 動くオブジェクトのスタイル */
+        .game-object {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%; /* 丸いオブジェクト */
+            border: 2px solid #333;
+            box-sizing: border-box;
+            /* オブジェクトのleftはJSで設定し、transformで中央揃え */
+            transform: translateX(-50%); 
+            will-change: transform; /* アニメーション最適化 */
+        }
+
+        /* ゴールラインのスタイル */
+        #goal-line {
+            position: absolute;
+            bottom: 50px; /* 画面下からの位置 */
+            left: 0;
+            width: 100%;
+            height: 5px;
+            background-color: #FFC107; /* 黄色系のゴールライン */
+            border-top: 2px dashed #FFA000;
+            border-bottom: 2px dashed #FFA000;
+            z-index: 5; /* オブジェクトより手前に表示 */
+        }
+        #goal-line::before {
+            content: "GOAL"; /* ゴールテキスト */
+            position: absolute;
+            top: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: #FFA000;
+            font-weight: bold;
+            font-size: 1.2em;
+            white-space: nowrap; /* テキストが改行されないように */
+        }
+
+        /* スコア表示のスタイル */
+        #score-display {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background-color: rgba(0, 0, 0, 0.5);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 5px;
+            font-size: 1.1em;
+            z-index: 10;
+        }
+
+        /* 最終スコア表示のスタイル */
+        #final-score {
+            font-size: 1.3em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+<body>
+    <div id="game-container">
+        <!-- スタート画面 -->
+        <div id="start-screen" class="screen">
+            <h1>タイムシンクロレース</h1>
+            <p>複数のオブジェクトがそれぞれ異なる速度で動きます。</p>
+            <p>画面をタップすると、一時的に全てのオブジェクトの動きがスローになります。</p>
+            <p>もう一度タップすると通常速度に戻ります。</p>
+            <p>全てのオブジェクトを同時にゴールラインを通過させましょう！</p>
+            <button id="start-button">スタート</button>
+        </div>
+
+        <!-- ゲーム画面 -->
+        <div id="game-screen" class="screen" style="display: none;">
+            <div id="score-display">経過時間: 0.00s</div>
+            <div id="goal-line"></div>
+            <div id="objects-container"></div>
+        </div>
+
+        <!-- 終了画面 -->
+        <div id="end-screen" class="screen" style="display: none;">
+            <h2>ゲーム終了！</h2>
+            <p id="final-score"></p>
+            <button id="retry-button">もう一度遊ぶ</button>
+        </div>
+    </div>
+
+    <script>
+        // DOM要素の取得
+        const gameContainer = document.getElementById('game-container');
+        const startScreen = document.getElementById('start-screen');
+        const gameScreen = document.getElementById('game-screen');
+        const endScreen = document.getElementById('end-screen');
+        const startButton = document.getElementById('start-button');
+        const retryButton = document.getElementById('retry-button');
+        const objectsContainer = document.getElementById('objects-container');
+        const scoreDisplay = document.getElementById('score-display');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        // ゲーム設定
+        const NUM_OBJECTS = 4; // オブジェクトの数
+        const OBJECT_SIZE = 50; // オブジェクトのサイズ (px)
+        const GOAL_LINE_BOTTOM_OFFSET = 50; // ゴールラインの画面下からの距離 (px)
+        const SLOW_MOTION_FACTOR = 0.2; // スローモーション時の速度倍率
+        const MIN_SPEED = 50;  // オブジェクトの最低速度 (px/s)
+        const MAX_SPEED = 150; // オブジェクトの最高速度 (px/s)
+        const GOAL_TOLERANCE = 100; // ゴール判定の許容時間差 (ms)
+        const OBJECT_COLORS = ['#FF6347', '#4682B4', '#3CB371', '#FFD700', '#BA55D3', '#DAA520']; // オブジェクトの色
+
+        // ゲーム状態変数
+        let objects = []; // オブジェクト情報を保持する配列
+        let isSlowMotion = false; // スローモーション中かどうかのフラグ
+        let animationFrameId = null; // requestAnimationFrame のID
+        let gameRunning = false; // ゲームが実行中かどうかのフラグ
+        let gameStartTime = 0; // ゲーム開始時のタイムスタンプ
+        let lastFrameTime = 0; // 最後のフレーム描画時のタイムスタンプ
+        let goalYPosition = 0; // ゴールラインのY座標 (オブジェクトの下端が触れる位置)
+
+        // --- 初期化とイベントリスナー設定 ---
+        function initGame() {
+            startButton.addEventListener('click', startGame);
+            retryButton.addEventListener('click', startGame);
+            // タップとクリックの両方に対応
+            gameScreen.addEventListener('touchstart', toggleSlowMotion, { passive: false });
+            gameScreen.addEventListener('click', toggleSlowMotion);
+
+            // ゲーム画面の高さからゴールラインのY座標を計算
+            // オブジェクトの下端がゴールラインの上端に触れる位置
+            goalYPosition = gameContainer.clientHeight - GOAL_LINE_BOTTOM_OFFSET;
+
+            // ゲーム開始画面を表示
+            showScreen(startScreen);
+        }
+
+        // --- ゲーム開始 ---
+        function startGame() {
+            resetGame(); // ゲーム状態をリセット
+            showScreen(gameScreen); // ゲーム画面に切り替え
+            
+            // オブジェクトを生成
+            for (let i = 0; i < NUM_OBJECTS; i++) {
+                createObject(i);
+            }
+
+            gameStartTime = Date.now(); // ゲーム開始時間を記録
+            lastFrameTime = performance.now(); // 最初のフレーム時間を記録
+            gameRunning = true; // ゲーム実行中フラグを立てる
+            animationFrameId = requestAnimationFrame(gameLoop); // ゲームループを開始
+        }
+
+        // --- オブジェクト生成 ---
+        function createObject(index) {
+            const objElement = document.createElement('div');
+            objElement.className = 'game-object';
+            objElement.style.width = `${OBJECT_SIZE}px`;
+            objElement.style.height = `${OBJECT_SIZE}px`;
+            objElement.style.backgroundColor = OBJECT_COLORS[index % OBJECT_COLORS.length];
+            // オブジェクトを横方向に均等に分散配置
+            objElement.style.left = `${(100 / (NUM_OBJECTS + 1)) * (index + 1)}%`;
+
+            // 初期位置を画面上部（画面外）にランダムに設定
+            const initialY = -Math.random() * (OBJECT_SIZE * 3) - OBJECT_SIZE;
+            // 速度をランダムに設定
+            const speed = MIN_SPEED + Math.random() * (MAX_SPEED - MIN_SPEED);
+
+            objects.push({
+                element: objElement, // DOM要素への参照
+                y: initialY, // オブジェクトの現在のY座標 (topからの相対位置)
+                speed: speed, // オブジェクトの速度 (px/s)
+                reachedGoalTime: null, // ゴールに到達した時間 (ms)
+                hasReachedGoal: false // ゴールラインを一度通過したかどうかのフラグ
+            });
+
+            // 初期位置を適用
+            objElement.style.transform = `translate(-50%, ${initialY}px)`;
+            objectsContainer.appendChild(objElement); // コンテナに追加
+        }
+
+        // --- ゲーム状態リセット ---
+        function resetGame() {
+            // 既存オブジェクトを削除
+            objectsContainer.innerHTML = '';
+            objects = []; // オブジェクト配列をクリア
+            isSlowMotion = false; // スローモーションを解除
+            gameRunning = false; // ゲーム実行中フラグをクリア
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId); // アニメーションフレームを停止
+            }
+            scoreDisplay.textContent = '経過時間: 0.00s'; // スコア表示をリセット
+            gameContainer.style.backgroundColor = '#e0f2f7'; // 背景色を通常に戻す
+        }
+
+        // --- ゲームループ ---
+        function gameLoop(currentTime) {
+            if (!gameRunning) {
+                return; // ゲームが実行中でなければ停止
+            }
+
+            // デルタタイム (前回のフレームからの経過時間) を計算 (秒単位)
+            const deltaTime = (currentTime - lastFrameTime) / 1000;
+            lastFrameTime = currentTime;
+
+            // スローモーション中であれば速度を調整
+            const effectiveDeltaTime = isSlowMotion ? deltaTime * SLOW_MOTION_FACTOR : deltaTime;
+
+            let allReachedGoal = true; // 全オブジェクトがゴールに到達したか
+            let minGoalTime = Infinity; // 最速ゴール時間
+            let maxGoalTime = -Infinity; // 最遅ゴール時間
+
+            for (let i = 0; i < objects.length; i++) {
+                const obj = objects[i];
+
+                if (!obj.hasReachedGoal) { // まだゴールしていないオブジェクトのみ移動
+                    obj.y += obj.speed * effectiveDeltaTime; // 位置を更新
+                    obj.element.style.transform = `translate(-50%, ${obj.y}px)`; // DOM要素の位置を更新
+
+                    // ゴール判定: オブジェクトの下端がゴールラインの上端に到達
+                    if (obj.y + OBJECT_SIZE >= goalYPosition) {
+                        obj.reachedGoalTime = Date.now(); // ゴール到達時間を記録
+                        obj.hasReachedGoal = true; // ゴールフラグを立てる
+                        // ゴールラインで停止させるために位置を調整
+                        obj.element.style.transform = `translate(-50%, ${goalYPosition - OBJECT_SIZE}px)`;
+                        obj.element.style.borderColor = '#4CAF50'; // ゴールしたことを示す色に変更
+                    } else {
+                        allReachedGoal = false; // まだゴールしていないオブジェクトがある
+                    }
+                }
+
+                // ゴール到達済みのオブジェクトの時間を集計
+                if (obj.hasReachedGoal) {
+                    minGoalTime = Math.min(minGoalTime, obj.reachedGoalTime);
+                    maxGoalTime = Math.max(maxGoalTime, obj.reachedGoalTime);
+                } else {
+                    allReachedGoal = false; // ゴールしていないオブジェクトがあるため、まだ全員ゴールではない
+                }
+            }
+
+            // スコア表示 (経過時間) を更新
+            const elapsedTime = (Date.now() - gameStartTime) / 1000;
+            scoreDisplay.textContent = `経過時間: ${elapsedTime.toFixed(2)}s`;
+
+            // 全オブジェクトがゴールに到達したらゲーム終了判定
+            if (allReachedGoal) {
+                const timeDifference = maxGoalTime - minGoalTime;
+                endGame(timeDifference <= GOAL_TOLERANCE, timeDifference);
+            } else {
+                animationFrameId = requestAnimationFrame(gameLoop); // 次のフレームを要求
+            }
+        }
+
+        // --- スローモーション切り替え ---
+        function toggleSlowMotion(event) {
+            event.preventDefault(); // タップ時のデフォルト動作（スクロール、ズームなど）を防止
+            if (!gameRunning) return; // ゲームが開始していなければ何もしない
+
+            isSlowMotion = !isSlowMotion; // スローモーション状態を反転
+            // 背景色でスローモードを視覚化
+            gameContainer.style.backgroundColor = isSlowMotion ? '#c0e0e8' : '#e0f2f7';
+        }
+
+        // --- ゲーム終了 ---
+        function endGame(success, timeDifference = 0) {
+            gameRunning = false; // ゲーム実行中フラグをクリア
+            if (animationFrameId) {
+                cancelAnimationFrame(animationFrameId); // アニメーションフレームを停止
+            }
+
+            // 最終スコア表示メッセージを設定
+            if (success) {
+                finalScoreDisplay.innerHTML = `成功！全てのオブジェクトが<br><b>${timeDifference}ms</b> の時間差でゴールしました！`;
+                finalScoreDisplay.style.color = '#4CAF50'; // 成功時の色
+            } else {
+                finalScoreDisplay.innerHTML = `失敗！最も速いオブジェクトと遅いオブジェクトの時間差は<br><b>${timeDifference}ms</b> でした。<br>${GOAL_TOLERANCE}ms 以内を目指しましょう。`;
+                finalScoreDisplay.style.color = '#F44336'; // 失敗時の色
+            }
+            showScreen(endScreen); // 終了画面に切り替え
+        }
+
+        // --- 画面切り替えヘルパー関数 ---
+        function showScreen(screenToShow) {
+            startScreen.style.display = 'none';
+            gameScreen.style.display = 'none';
+            endScreen.style.display = 'none';
+            screenToShow.style.display = 'flex'; // flex にして中央揃えを維持
+        }
+
+        // ページロード時にゲームを初期化
+        initGame();
+    </script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

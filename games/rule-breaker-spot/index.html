@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>異形を探せ！</title>
+<style>
+  /* 全体のリセットと基本的なスタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden; /* スクロールを禁止 */
+    background: #14213d; /* 背景色 */
+    color: #fff; /* 文字色 */
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; /* タッチイベントのデフォルト動作抑制（ピンチズームなど） */
+    user-select: none; /* テキスト選択禁止 */
+    -webkit-user-select: none;
+  }
+  /* アプリのコンテナ */
+  #app {
+    position: fixed;
+    inset: 0; /* 画面全体に広げる */
+    display: flex;
+    flex-direction: column; /* 縦方向に要素を並べる */
+  }
+  /* HUD (スコア、レベル、ライフ表示部分) */
+  #hud {
+    padding: 10px 14px;
+    background: #0d1730;
+  }
+  #stats {
+    display: flex;
+    justify-content: space-between; /* 要素を両端に配置 */
+    font-size: 17px;
+    font-weight: bold;
+  }
+  #hint {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 15px;
+    color: #ffd166; /* ヒントの文字色 */
+  }
+  /* ゲームフィールド */
+  #field {
+    position: relative;
+    flex: 1; /* 残りの高さを全て占める */
+    overflow: hidden;
+  }
+  /* 図形を包むラッパー */
+  .shape-wrapper {
+    position: absolute;
+    display: flex; /* SVGを中央に配置するためにflexboxを使う */
+    align-items: center;
+    justify-content: center;
+    pointer-events: auto; /* タップ可能にする */
+    /* widthとheight、leftとtopはJavaScriptで設定される */
+  }
+  .shape-wrapper svg {
+    display: block; /* SVGの余白をなくす */
+  }
+  /* タップされた図形のアニメーション */
+  .shape-wrapper.hit, .shape-wrapper.hit-mistake {
+    animation: pop .2s ease-out forwards; /* 拡大してフェードアウト */
+    pointer-events: none; /* アニメーション中はタップ不可 */
+  }
+  @keyframes pop {
+    to { transform: scale(1.7); opacity: 0; }
+  }
+  /* フィードバック表示 (+1点, ミス!) */
+  .fb {
+    position: absolute;
+    font-size: 22px;
+    font-weight: bold;
+    pointer-events: none; /* タップ不可 */
+    animation: rise .6s ease-out forwards; /* 上昇してフェードアウト */
+    z-index: 5; /* 他の要素より手前に表示 */
+  }
+  .good { color: #7dffa0; } /* 良い結果の文字色 */
+  .bad { color: #ff7d7d; } /* 悪い結果の文字色 */
+  @keyframes rise {
+    to { transform: translateY(-36px); opacity: 0; }
+  }
+  /* オーバーレイ (開始画面、ゲームオーバー画面) */
+  #overlay {
+    position: absolute;
+    inset: 0; /* 画面全体に広げる */
+    background: rgba(8,14,30,.95); /* 半透明の暗い背景 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    z-index: 10; /* 最前面に表示 */
+  }
+  #overlay h1 {
+    font-size: 28px;
+    margin: 0 0 14px;
+  }
+  #overlay p {
+    font-size: 17px;
+    line-height: 1.7;
+    margin: 4px 0;
+    max-width: 320px;
+  }
+  .big {
+    font-size: 44px;
+    font-weight: bold;
+    color: #ffd166;
+    margin: 6px 0;
+  }
+  button {
+    margin-top: 22px;
+    min-width: 200px;
+    min-height: 56px;
+    padding: 14px 36px;
+    font-size: 22px;
+    font-weight: bold;
+    color: #3a2a00;
+    background: #ffd166;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">一つだけ違う形の図形か、違う色の図形をタップ!</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">異形を探せ！</h1>
+    <div id="ovBody">
+      <!-- 決まりごと3: 遊び方を2〜3行で表示するよう修正 -->
+      <p>画面に表示される図形の中から、<br><b>一つだけ</b>違うものを見つけてタップしよう！</p>
+      <p>間違った場所をタップするとミス。ライフは3つだよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // DOM要素の取得
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+  var hintEl = document.getElementById("hint");
+
+  // ゲームの状態変数
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var shapeGenerationTimeout = null; // 図形セット生成用のタイマー
+
+  // SVG図形のパスデータ定義
+  const SHAPE_DATA = {
+    'circle': '<circle cx="50" cy="50" r="40"/>',
+    'square': '<rect x="10" y="10" width="80" height="80"/>',
+    'triangle': '<path d="M50 10 L90 90 H10 Z"/>', // 正三角形
+    'diamond': '<path d="M50 10 L90 50 L50 90 L10 50 Z"/>', // ひし形
+    'pentagon': '<path d="M50,10 L90,38 L75,85 L25,85 L10,38 Z"/>' // 五角形
+  };
+  // 利用可能な色の定義
+  const ALL_COLORS = [
+    '#FFD166', // yellow
+    '#7dffa0', // green
+    '#7dc4ff', // blue
+    '#ff7d7d', // red
+    '#c47dff', // purple
+    '#ffffff', // white
+    '#2a9d8f', // teal
+    '#e76f51', // coral
+    '#e9c46a', // gold
+    '#a2d2ff' // light blue
+  ];
+
+  // ベストスコアの読み込みと保存
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("iji_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("iji_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの表示を更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // 要素をDOMから削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // フィードバック表示 (+1点, ミス!)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス時の処理
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) {
+      endGame();
+    } else {
+      // ミスした場合も新しい図形セットを生成してゲームを継続
+      shapeGenerationTimeout = setTimeout(function() { generateShapes(gen); }, 300);
+    }
+  }
+
+  // 図形セットの生成
+  function generateShapes(myGen) {
+    if (!running || myGen !== gen) return;
+
+    clearTimeout(shapeGenerationTimeout); // 前のタイマーをクリア
+    field.innerHTML = ""; // 既存の図形を全てクリア
+
+    const fieldRect = field.getBoundingClientRect();
+    const availableWidth = fieldRect.width;
+    const availableHeight = fieldRect.height;
+
+    // レベルに応じて図形の数を決定
+    const baseShapes = 4; // 初期図形数
+    const shapesToAddPerLevel = 2; // レベルごとに増える図形数
+    const maxShapes = 42; // 最大図形数
+    let numShapes = Math.min(maxShapes, baseShapes + level * shapesToAddPerLevel);
+
+    // 適切な図形サイズとグリッドの次元を決定
+    // 図形サイズは、利用可能な空間と図形数に基づいて動的に調整
+    let shapeSize = Math.max(40, Math.floor(Math.min(availableWidth, availableHeight) / (Math.sqrt(numShapes) + 1)) - 10);
+    shapeSize = Math.min(90, shapeSize); // 最大図形サイズを90pxに制限
+    
+    // 実際の図形サイズとスペースに基づいて列数と行数を計算
+    let cols = Math.floor((availableWidth - 10) / (shapeSize + 10)); // 左右の余白10px、図形間の余白10px
+    let rows = Math.floor((availableHeight - 10) / (shapeSize + 10));
+
+    // 画面が小さすぎるなどで全く配置できない場合のフォールバック
+    if (cols === 0 || rows === 0) {
+        shapeSize = 40; // 最小サイズに強制
+        cols = Math.floor((availableWidth - 10) / (shapeSize + 10));
+        rows = Math.floor((availableHeight - 10) / (shapeSize + 10));
+        if (cols === 0) cols = 1; // 少なくとも1列
+        if (rows === 0) rows = 1; // 少なくとも1行
+    }
+    
+    // 実際のグリッド容量を超えないように図形数を調整
+    numShapes = Math.min(numShapes, cols * rows);
+    if (numShapes < 1) numShapes = 1; // 最低でも1つの図形は配置
+
+    // 図形全体を中央に配置するためのパディング
+    const paddingX = (availableWidth - (cols * (shapeSize + 10) - 10)) / 2;
+    const paddingY = (availableHeight - (rows * (shapeSize + 10) - 10)) / 2;
+
+    // メインの図形の種類と色をランダムに選択
+    const allShapeTypes = Object.keys(SHAPE_DATA);
+    const mainShapeType = allShapeTypes[Math.floor(Math.random() * allShapeTypes.length)];
+
+    // レベルに応じて利用可能な色の数を決定
+    const numAvailableColors = Math.min(ALL_COLORS.length, 2 + Math.floor(level / 3));
+    const currentColors = ALL_COLORS.slice(0, numAvailableColors);
+    const mainColor = currentColors[Math.floor(Math.random() * currentColors.length)];
+
+    // 違反の種類を決定 (0:形違い, 1:色違い)
+    const violationType = Math.floor(Math.random() * 2);
+
+    let violationShapeType = mainShapeType;
+    let violationColor = mainColor;
+
+    if (violationType === 0) { // 形違いの違反
+      while (allShapeTypes.length > 1 && violationShapeType === mainShapeType) {
+        violationShapeType = allShapeTypes[Math.floor(Math.random() * allShapeTypes.length)];
+      }
+    } else { // 色違いの違反
+      while (currentColors.length > 1 && violationColor === mainColor) {
+        violationColor = currentColors[Math.floor(Math.random() * currentColors.length)];
+      }
+    }
+    
+    // 違反図形のランダムなインデックスを決定
+    const violationIndex = Math.floor(Math.random() * numShapes);
+
+    // 図形を生成して配置
+    for (let i = 0; i < numShapes; i++) {
+      const isViolation = (i === violationIndex);
+      const shapeType = isViolation ? violationShapeType : mainShapeType;
+      const color = isViolation ? violationColor : mainColor;
+
+      const shapeWrapper = document.createElement("div");
+      shapeWrapper.className = "shape-wrapper";
+      shapeWrapper.style.width = shapeSize + "px";
+      shapeWrapper.style.height = shapeSize + "px";
+
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 100 100");
+      svg.setAttribute("width", shapeSize);
+      svg.setAttribute("height", shapeSize);
+      svg.innerHTML = SHAPE_DATA[shapeType];
+      // SVGパス/図形要素に色を設定
+      const svgElement = svg.querySelector('path, circle, rect');
+      if (svgElement) svgElement.setAttribute("fill", color);
+
+      shapeWrapper.appendChild(svg);
+      field.appendChild(shapeWrapper);
+
+      // グリッド状に図形を配置
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const x = paddingX + col * (shapeSize + 10);
+      const y = paddingY + row * (shapeSize + 10);
+      shapeWrapper.style.left = x + "px";
+      shapeWrapper.style.top = y + "px";
+
+      // イベントリスナーをクロージャで設定
+      (function(currentShapeWrapper, isCurrentViolation, currentX, currentY) {
+        currentShapeWrapper.addEventListener("pointerdown", function (ev) {
+          ev.preventDefault();
+          ev.stopPropagation(); // フィールド全体のイベントに伝播させない
+          if (!running || myGen !== gen) return; // 既に終了したゲームや旧世代のイベントは無視
+
+          if (isCurrentViolation) {
+            // 正解の場合
+            score += 1;
+            level = 1 + Math.floor(score / 3); // スコア3点ごとにレベルアップ
+            feedback(currentX + shapeSize/2, currentY + shapeSize/2, "+1", "good");
+            currentShapeWrapper.classList.add("hit"); // 正解時のアニメーション
+            setTimeout(function() { removeEl(currentShapeWrapper); }, 220);
+            render();
+            // 短い遅延後に新しい図形セットを生成
+            shapeGenerationTimeout = setTimeout(function() { generateShapes(myGen); }, 300);
+          } else {
+            // 不正解の場合
+            miss(currentX + shapeSize/2, currentY + shapeSize/2);
+            currentShapeWrapper.classList.add("hit-mistake"); // 不正解時のアニメーション
+            setTimeout(function() { removeEl(currentShapeWrapper); }, 220);
+            render();
+            // ミス後も短く遅延後に新しい図形セットを生成
+            shapeGenerationTimeout = setTimeout(function() { generateShapes(myGen); }, 300);
+          }
+        });
+      })(shapeWrapper, isViolation, x, y);
+    }
+    
+    // ヒントテキストを更新
+    if (violationType === 0) { // 形違いの違反の場合
+      hintEl.textContent = "他と形が違う図形をタップ!";
+    } else { // 色違いの違反の場合
+      hintEl.textContent = "他と色が違う図形をタップ!";
+    }
+  }
+
+  // 図形以外の場所をタップした場合の処理
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    var r = field.getBoundingClientRect();
+    miss(ev.clientX - r.left, ev.clientY - r.top);
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    gen += 1; // 世代を更新して古いイベントやタイマーを無効化
+    var myGen = gen;
+    clearTimeout(shapeGenerationTimeout); // 待機中の図形生成タイマーをクリア
+    field.innerHTML = ""; // フィールドの図形を全てクリア
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフを初期化
+    render(); // HUDを更新
+    overlay.style.display = "none"; // オーバーレイを非表示
+    running = true; // ゲームをプレイ中に設定
+    // 最初の図形セットを生成
+    shapeGenerationTimeout = setTimeout(function() { generateShapes(myGen); }, 500);
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false; // ゲームを停止中に設定
+    gen += 1; // 世代を更新して現在のゲームのイベントやタイマーを無効化
+    clearTimeout(shapeGenerationTimeout); // 待機中の図形生成タイマーをクリア
+    
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); } // 新記録なら保存
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  // スタートボタンにイベントリスナーを設定
+  startBtn.addEventListener("click", startGame);
+  render(); // 初期表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

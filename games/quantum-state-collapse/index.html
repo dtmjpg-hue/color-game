@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>瞬き粒子タップ</title>
+<style>
+  /* 全体のリセットと基本スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+
+  /* アプリケーションのメインコンテナ */
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* HUD (Head-Up Display) - スコア、レベル、ライフ表示部分 */
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+
+  /* ゲームフィールド */
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  /* 粒子 (Particle) のスタイル */
+  .particle {
+    position: absolute;
+    width: 48px; /* 粒子のサイズ */
+    height: 48px;
+    border-radius: 50%;
+    background: #ffd166; /* 点滅時の色 */
+    box-shadow: 0 0 10px rgba(255, 209, 102, 0.7); /* 薄い光 */
+    opacity: 0; /* 初期は非表示 */
+    transition: opacity 0.05s ease-out; /* 点滅を少し滑らかにするためのトランジション */
+    cursor: pointer; /* タップ可能であることを示す */
+  }
+  .particle.stable {
+    background: #7dffa0; /* 安定時の色 (緑がかった色) */
+    box-shadow: 0 0 15px rgba(125, 255, 160, 0.9), 0 0 30px rgba(125, 255, 160, 0.6); /* より強い光 */
+    opacity: 1 !important; /* 強制的に表示 (transitionを上書き) */
+    border: 2px solid #fff; /* 安定したときの視覚的な強調 */
+  }
+
+  /* フィードバック (得点・ミス表示) */
+  .fb {
+    position: absolute;
+    font-size: 22px;
+    font-weight: bold;
+    pointer-events: none; /* タップイベントを妨げない */
+    animation: rise .6s ease-out forwards; /* 上昇アニメーション */
+  }
+  .good { color: #7dffa0; } /* 成功時の色 */
+  .bad { color: #ff7d7d; }  /* 失敗時の色 */
+  @keyframes rise {
+    to { transform: translateY(-36px); opacity: 0; } /* 上に移動して消える */
+  }
+
+  /* オーバーレイ (ゲーム開始・終了画面) */
+  #overlay {
+    position: absolute; inset: 0;
+    background: rgba(8,14,30,.95); /* 半透明の暗い背景 */
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    padding: 24px; text-align: center; z-index: 10;
+  }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; } /* 大きいスコア表示 */
+  button {
+    margin-top: 22px; min-width: 200px; min-height: 56px;
+    padding: 14px 36px; font-size: 22px; font-weight: bold;
+    color: #3a2a00; background: #ffd166;
+    border: none; border-radius: 14px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">光が止まった粒子をタップ！</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">瞬き粒子タップ</h1>
+    <div id="ovBody">
+      <p><b>点滅する光の粒子</b>が、<b>一瞬止まったらタップ！</b></p>
+      <p>点滅中タップ・見逃し・何もなしはミス。ライフは3つ。</p>
+      <p>高スコアでレベルアップ、もっと素早くなるよ！</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // DOM要素の参照を取得
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲーム状態変数
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var particleElements = []; // 画面上の粒子DOM要素を格納する配列
+  var activeFlickerIndex = -1; // 現在点滅している粒子のインデックス
+  var activeStableParticle = null; // 現在安定している粒子要素への参照
+
+  // ゲーム進行を制御するタイマー変数群
+  var flickerSequenceTimer = null; // 点滅アニメーションのタイマー
+  var stableParticleTimer = null;  // 安定粒子が時間切れになるタイマー
+  var gameCycleTimer = null;       // ゲームのメインサイクル（点滅→安定→待機）を管理するタイマー
+
+  // ゲームパラメータの基本値 (難易度調整の基準となる)
+  var particleCount = 15; // 画面上に配置する粒子の数 (固定)
+  var flickerBaseDuration = 1800; // 点滅が続く時間の基本 (ms)
+  var stableBaseDuration = 600;   // 安定している時間の基本 (ms)
+  var nextCycleBaseDelay = 500;   // 次のサイクルまでの遅延の基本 (ms)
+
+  // ベストスコアの読み書き
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("flashparticle_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("flashparticle_best", String(v)); } catch (e) {}
+  }
+
+  // スコア、レベル、ライフを画面に表示
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // DOM要素を削除するヘルパー関数
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // タップ結果のフィードバック表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理
+  function miss(x, y) {
+    if (!running) return; // ゲームが実行中でなければ何もしない
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame(); // ライフがなくなったらゲームオーバー
+  }
+
+  // 全てのゲーム関連タイマーを停止し、粒子状態をリセットする
+  function stopAllGameTimers() {
+    clearTimeout(flickerSequenceTimer);
+    clearTimeout(stableParticleTimer);
+    clearTimeout(gameCycleTimer);
+    if (activeStableParticle) {
+        // 安定していた粒子があれば、元の状態に戻す
+        activeStableParticle.style.opacity = '0';
+        activeStableParticle.classList.remove('stable');
+        activeStableParticle = null;
+    }
+    particleElements.forEach(p => p.style.opacity = '0'); // 全ての粒子を非表示に
+    activeFlickerIndex = -1; // 点滅インデックスをリセット
+  }
+
+  // 粒子を初期化（生成とランダム配置）
+  function initParticles() {
+    field.innerHTML = ""; // 既存の粒子を全て削除
+    particleElements = [];
+    var rect = field.getBoundingClientRect(); // フィールドのサイズを取得
+    var pSize = 48; // 粒子のサイズ (CSSと合わせる)
+
+    for (var i = 0; i < particleCount; i++) {
+      var p = document.createElement("div");
+      p.className = "particle";
+      // 粒子がフィールド内に収まるようにランダムな位置を計算
+      var x = Math.floor(Math.random() * Math.max(1, rect.width - pSize));
+      var y = Math.floor(Math.random() * Math.max(1, rect.height - pSize));
+      p.style.left = x + "px";
+      p.style.top = y + "px";
+      field.appendChild(p);
+      particleElements.push(p);
+    }
+  }
+
+  // ゲームのメインサイクル (点滅フェーズ -> 安定フェーズ) を実行する
+  function runGameCycle(myGen) {
+    if (!running || myGen !== gen) return; // 現在のゲーム世代でなければ何もしない
+
+    stopAllGameTimers(); // 前のサイクルで残ったものをクリアし、粒子を非表示に
+
+    // 難易度に応じたパラメータ計算
+    // レベルが上がるほど、点滅の切り替わりは速く、点滅全体時間は短くなる
+    var currentFlickerInterval = Math.max(40, 100 - (level - 1) * 5); // 点滅の切り替わり速度 (短いほど速い)
+    var currentFlickerDuration = Math.max(600, flickerBaseDuration - (level - 1) * 100); // 点滅が続く時間 (短いほど難しい)
+
+    let flickerStartTime = Date.now(); // 点滅フェーズ開始時刻
+    function doFlicker() {
+      if (!running || myGen !== gen) return;
+      if (Date.now() - flickerStartTime > currentFlickerDuration) {
+        // 点滅フェーズが指定時間を経過したら、安定フェーズへ移行
+        clearTimeout(flickerSequenceTimer);
+        makeStable(myGen);
+        return;
+      }
+
+      // 前回の点滅を非表示に
+      if (activeFlickerIndex !== -1 && particleElements[activeFlickerIndex]) {
+        particleElements[activeFlickerIndex].style.opacity = '0';
+      }
+
+      // 次に点滅させる粒子を選択 (現在点滅している粒子とは異なるものを選択)
+      let nextFlickerIndex = activeFlickerIndex;
+      // particleElements.length が 1 の場合、同じ粒子が選ばれ続けるのを許容
+      while (particleElements.length > 1 && nextFlickerIndex === activeFlickerIndex) {
+        nextFlickerIndex = Math.floor(Math.random() * particleElements.length);
+      }
+      activeFlickerIndex = nextFlickerIndex;
+
+      // 選択した粒子を表示
+      if (particleElements[activeFlickerIndex]) {
+          particleElements[activeFlickerIndex].style.opacity = '1';
+      }
+
+      // 次の点滅をスケジュール
+      flickerSequenceTimer = setTimeout(doFlicker, currentFlickerInterval);
+    }
+
+    flickerSequenceTimer = setTimeout(doFlicker, 0); // 即座に点滅開始
+  }
+
+  // 安定フェーズ
+  function makeStable(myGen) {
+    if (!running || myGen !== gen) return;
+
+    clearTimeout(flickerSequenceTimer); // 点滅タイマーを停止
+    particleElements.forEach(p => p.style.opacity = '0'); // 全ての粒子を非表示にする
+
+    // 安定させる粒子をランダムに選択
+    var randomIndex = Math.floor(Math.random() * particleElements.length);
+    activeStableParticle = particleElements[randomIndex];
+    activeStableParticle.style.opacity = '1';
+    activeStableParticle.classList.add('stable'); // 安定状態のスタイルを適用
+
+    // 難易度に応じた安定時間計算
+    // レベルが上がるほど、安定している時間が短くなる
+    var currentStableDuration = Math.max(200, stableBaseDuration - (level - 1) * 30); // 安定している時間 (短いほど難しい)
+
+    stableParticleTimer = setTimeout(() => {
+      if (!running || myGen !== gen) return;
+
+      // activeStableParticle が既に null になっている可能性があるためチェック
+      if (activeStableParticle) {
+        // 安定を見逃したミス
+        var r = activeStableParticle.getBoundingClientRect();
+        // 粒子の中心座標でフィードバック表示
+        miss(r.left + r.width / 2, r.top + r.height / 2);
+        
+        // 粒子状態をリセット
+        activeStableParticle.style.opacity = '0';
+        activeStableParticle.classList.remove('stable');
+        activeStableParticle = null;
+
+        // ライフが残っていれば次のサイクルへ、なければゲームオーバー
+        if (lives > 0) {
+          scheduleNextGameCycle(myGen);
+        } else {
+          endGame();
+        }
+      } else {
+        // activeStableParticle が既に null になっていた場合 (例: 別のミス処理でクリアされた)
+        // この場合は単に次のサイクルをスケジュールするか、ゲームオーバー処理へ
+        if (lives > 0) {
+          scheduleNextGameCycle(myGen);
+        } else {
+          endGame();
+        }
+      }
+    }, currentStableDuration);
+  }
+
+  // 次のゲームサイクル開始をスケジュール
+  function scheduleNextGameCycle(myGen) {
+    if (!running || myGen !== gen) return;
+    // 難易度に応じた次のサイクルまでの遅延計算
+    // レベルが上がるほど、次のサイクルまでの待機時間が短くなる
+    var currentNextCycleDelay = Math.max(200, nextCycleBaseDelay - (level - 1) * 20); // 次のサイクルまでの待機時間
+    gameCycleTimer = setTimeout(() => {
+      runGameCycle(myGen);
+    }, currentNextCycleDelay);
+  }
+
+  // ゲームフィールド全体のタップイベントハンドラ
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return; // ゲームが実行中でなければ何もしない
+
+    var r = field.getBoundingClientRect();
+    var tapX = ev.clientX - r.left;
+    var tapY = ev.clientY - r.top;
+
+    // タップされた要素が粒子であるかチェック
+    var tappedParticle = null;
+    if (ev.target.classList.contains('particle')) {
+      tappedParticle = ev.target;
+    }
+
+    if (activeStableParticle && tappedParticle === activeStableParticle) {
+      // 成功: 安定した粒子を正しくタップ
+      clearTimeout(stableParticleTimer); // 安定タイムアウトをクリア
+      score += 1;
+      level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+      feedback(tapX, tapY, "+1", "good");
+      
+      // 粒子状態をリセット
+      activeStableParticle.classList.remove('stable');
+      activeStableParticle.style.opacity = '0';
+      activeStableParticle = null;
+      render(); // スコア、レベル、ライフを更新表示
+
+      clearTimeout(flickerSequenceTimer); // 点滅中の場合も安全にクリア
+      scheduleNextGameCycle(gen); // 次のゲームサイクルへ
+    } else {
+      // ミス: 安定していない粒子をタップ、または何もない場所をタップ
+
+      // 安定粒子が存在していた場合、そのタイマーをクリアして状態リセット
+      if (activeStableParticle) {
+          clearTimeout(stableParticleTimer);
+          activeStableParticle.classList.remove('stable');
+          activeStableParticle.style.opacity = '0';
+          activeStableParticle = null;
+      }
+      // 点滅中や次のサイクル待機中のタイマーもクリア (ミスで中断するため)
+      clearTimeout(flickerSequenceTimer);
+      clearTimeout(gameCycleTimer);
+
+      miss(tapX, tapY); // ミス処理
+      if (lives > 0) {
+          scheduleNextGameCycle(gen); // ライフが残っていれば次のサイクルへ
+      } else {
+          endGame(); // ゲームオーバー
+      }
+    }
+    ev.stopPropagation(); // イベントが親要素に伝播しないようにする
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    gen += 1; // 新しいゲーム世代を開始 (古いタイマーが無効になるように)
+    var myGen = gen; // 現在のゲーム世代をキャプチャ
+    stopAllGameTimers(); // 確実に以前のゲームのタイマーを停止
+    field.innerHTML = ""; // 以前の粒子DOM要素を削除
+    score = 0; level = 1; lives = 3; // ゲーム状態をリセット
+    render(); // HUDを初期表示
+    overlay.style.display = "none"; // オーバーレイを非表示に
+    running = true; // ゲームを走行中に設定
+    initParticles(); // 新しい粒子を生成し配置
+    scheduleNextGameCycle(myGen); // 最初のゲームサイクルを開始
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false; // ゲームを停止
+    gen += 1; // 新しい世代の開始 (次の「もういちど」用)
+    stopAllGameTimers(); // 全てのタイマーを停止
+    field.innerHTML = ""; // 粒子DOM要素を削除
+
+    // ベストスコアの更新と表示
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを再表示
+  }
+
+  // スタートボタンにイベントリスナーを登録
+  startBtn.addEventListener("click", startGame);
+  render(); // 最初のHUD表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

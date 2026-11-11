@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>フラッシュグリッド</title>
+<style>
+  /* お手本からの共通スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  #field { position: relative; flex: 1; overflow: hidden; } /* fieldはグリッドの親、グリッドはfield内で中央配置 */
+
+  /* グリッドとセルのスタイル */
+  #grid-container {
+    display: grid;
+    gap: 3px; /* セル間の隙間 */
+    background: #0d1730; /* 隙間の色 */
+    padding: 3px;
+    position: absolute; /* 親要素 #field 内で位置指定 */
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%); /* 中央揃え */
+    max-width: calc(100% - 24px); /* 左右に12pxずつ余白 */
+    max-height: calc(100% - 24px - 60px); /* 上下12pxずつ余白 + HUDの高さ約60pxを考慮 */
+    aspect-ratio: 1 / 1; /* グリッド全体を正方形に保つ */
+    border-radius: 8px;
+  }
+  .grid-cell {
+    background: #3a2a00;
+    border-radius: 6px; /* セルの角丸 */
+    cursor: pointer;
+    transition: background 0.1s ease-out, box-shadow 0.1s ease-out; /* 光る際のアニメーション */
+  }
+  .grid-cell.highlight {
+    background: #ffd166;
+    box-shadow: 0 0 10px #ffd166;
+  }
+  .grid-cell.flash {
+    background: #ff0000; /* 強く点滅する色 */
+    box-shadow: 0 0 15px #ff0000, 0 0 30px #ff0000;
+    animation: flash-animation 0.3s infinite alternate; /* 点滅アニメーション */
+  }
+  @keyframes flash-animation {
+    from { opacity: 1; }
+    to { opacity: 0.6; }
+  }
+
+  /* フィードバック (お手本から流用) */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; z-index: 1; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイ (お手本から流用) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">光るパターンを覚えて、最後に強く光るセルをタップ！</div>
+  </div>
+  <div id="field">
+    <div id="grid-container"></div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">フラッシュグリッド</h1>
+    <div id="ovBody">
+      <p>グリッド上のセルが光る<b>パターン</b>を覚えよう！</p>
+      <p>パターンが終わったら、<b>最後に強く点滅するセル</b>をタップ！</p>
+      <p>タップを間違えたり、タイミングを逃すと<b>ミス</b>。<br>ライフは3つ。3回ミスするとおしまい。</p>
+      <p>点数が上がるとレベルが上がって、パターンが<b>速く</b>、<b>長く</b>、<b>複雑</b>になるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // DOM要素の参照
+  var gridContainer = document.getElementById("grid-container");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var hintEl = document.getElementById("hint");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲームの状態変数
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+
+  // ゲームロジック変数
+  var gridSize = 3; // N x N グリッド (例: 3x3, 4x4, 5x5)
+  var patternLength = 3; // パターンで光るセルの数
+  var pattern = []; // パターンのセルのインデックス配列
+  var targetCellIndex = -1; // プレイヤーがタップすべき最後のセルのインデックス
+  var patternDisplayIndex = 0; // 現在表示中のパターンのインデックス
+  var isPatternPlaying = false; // パターンアニメーション中かどうか
+  var isWaitingForTap = false; // プレイヤーのタップを待っている状態か
+  var allTimeouts = []; // 全てのsetTimeout IDを管理し、リセット時にクリアするため
+
+  // 難易度設定 (レベルに応じて調整される基本値)
+  var highlightDuration = 500; // 各セルが光る時間 (ミリ秒)
+  var flashDuration = 1000; // ターゲットセルが点滅する時間 (ミリ秒)
+
+  // 難易度の上限/下限
+  var MAX_GRID_SIZE = 5; // 最大グリッドサイズ (例: 5x5)
+  var MAX_PATTERN_LENGTH = 15; // パターン内の最大セル数
+  var MIN_HIGHLIGHT_DURATION = 200; // 各セルが光る最短時間
+  var MIN_FLASH_DURATION = 400; // ターゲットセルが点滅する最短時間
+
+  // --- ヘルパー関数 (お手本から流用) ---
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("flashgrid_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("flashgrid_best", String(v)); } catch (e) {}
+  }
+
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // フィードバック表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // 座標を gridContainer 相対に調整
+    var r = gridContainer.getBoundingClientRect();
+    f.style.left = (x - r.left) + "px";
+    f.style.top = (y - r.top) + "px";
+    gridContainer.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // --- ゲーム固有のヘルパー関数 ---
+  // 全てのタイマーをクリア
+  function clearAllTimeouts() {
+    allTimeouts.forEach(function(id) { clearTimeout(id); });
+    allTimeouts = [];
+  }
+
+  // 全てのセルのハイライトと点滅を解除
+  function clearAllCellHighlightsAndFlashes() {
+    document.querySelectorAll(".grid-cell").forEach(function(cell) {
+      cell.classList.remove("highlight", "flash");
+    });
+  }
+
+  // グリッドを生成
+  function createGrid(size) {
+    gridContainer.innerHTML = ""; // 既存のセルをクリア
+    gridContainer.style.gridTemplateColumns = "repeat(" + size + ", 1fr)";
+    gridContainer.style.gridTemplateRows = "repeat(" + size + ", 1fr)";
+
+    var cellCount = size * size;
+    for (var i = 0; i < cellCount; i++) {
+      var cell = document.createElement("div");
+      cell.className = "grid-cell";
+      cell.dataset.index = i; // セルのインデックスをデータ属性として保存
+      cell.addEventListener("pointerdown", function(e) {
+        e.stopPropagation(); // gridContainerのpointerdownイベントへの伝播を停止
+        if (running) {
+          handleCellTap(this.dataset.index, e, gen);
+        }
+      });
+      gridContainer.appendChild(cell);
+    }
+  }
+
+  // 難易度を調整
+  function adjustDifficulty() {
+    // グリッドサイズ: 4レベルごとに1増加 (3x3 -> 4x4 -> 5x5)
+    gridSize = Math.min(MAX_GRID_SIZE, 3 + Math.floor((level - 1) / 4));
+    // パターン長: 2レベルごとに1増加
+    patternLength = Math.min(MAX_PATTERN_LENGTH, 3 + Math.floor((level - 1) / 2));
+    // 各セルが光る時間: レベルアップごとに減少
+    highlightDuration = Math.max(MIN_HIGHLIGHT_DURATION, 500 - (level - 1) * 30);
+    // ターゲットセルが点滅する時間: レベルアップごとに減少
+    flashDuration = Math.max(MIN_FLASH_DURATION, 1000 - (level - 1) * 60);
+  }
+
+  // パターンを生成
+  function generatePattern() {
+    pattern = [];
+    var cellCount = gridSize * gridSize;
+    var availableCells = [];
+    for (var i = 0; i < cellCount; i++) availableCells.push(i);
+
+    // 重複のないランダムなセルインデックスでパターンを生成
+    for (var i = 0; i < patternLength; i++) {
+      if (availableCells.length === 0) break;
+      var randomIndex = Math.floor(Math.random() * availableCells.length);
+      var cellIndex = availableCells.splice(randomIndex, 1)[0]; // 選んだセルをavailableCellsから削除
+      pattern.push(cellIndex);
+    }
+    targetCellIndex = pattern[pattern.length - 1]; // パターンの最後のセルがターゲット
+  }
+
+  // パターンを再生
+  function playPattern(myGen) {
+    if (!running || myGen !== gen) return; // 実行中ではない、または古い世代のイベントであれば何もしない
+
+    isPatternPlaying = true;
+    isWaitingForTap = false;
+    hintEl.textContent = "光るパターンを覚えよう！";
+    
+    var gridCells = document.querySelectorAll(".grid-cell");
+    patternDisplayIndex = 0; // パターン表示の開始インデックスをリセット
+    
+    displayNextCellInPattern(myGen, gridCells);
+  }
+
+  // パターン内の次のセルを表示
+  function displayNextCellInPattern(myGen, gridCells) {
+    if (!running || myGen !== gen) return;
+
+    if (patternDisplayIndex >= pattern.length) {
+      // パターン内の全てのセルが表示されたら、ターゲットセルをハイライト
+      var timeoutId = setTimeout(function(){ highlightTargetCell(myGen); }, 150); // 少し間を置く
+      allTimeouts.push(timeoutId);
+      return;
+    }
+
+    var cellIndex = pattern[patternDisplayIndex];
+    var cell = gridCells[cellIndex];
+    
+    cell.classList.add("highlight"); // セルをハイライト
+
+    // ハイライトを解除し、次のセルを表示するためのタイマー
+    var timeoutId = setTimeout(function() {
+      cell.classList.remove("highlight");
+      patternDisplayIndex++;
+      displayNextCellInPattern(myGen, gridCells);
+    }, highlightDuration);
+    allTimeouts.push(timeoutId);
+  }
+
+  // ターゲットセルを点滅表示
+  function highlightTargetCell(myGen) {
+    if (!running || myGen !== gen) return;
+
+    isPatternPlaying = false;
+    isWaitingForTap = true; // タップ待ち状態に移行
+    hintEl.textContent = "強く光るセルをタップ！";
+
+    var gridCells = document.querySelectorAll(".grid-cell");
+    var targetCell = gridCells[targetCellIndex];
+    
+    targetCell.classList.add("flash"); // ターゲットセルを点滅させる
+
+    // プレイヤーが時間内にタップしなかった場合のタイマー
+    var timeoutId = setTimeout(function() {
+      if (isWaitingForTap && running && myGen === gen) { // まだタップ待ち状態であればミス
+        var rect = targetCell.getBoundingClientRect();
+        miss(rect.left + rect.width/2, rect.top + rect.height/2, myGen);
+      }
+    }, flashDuration);
+    allTimeouts.push(timeoutId);
+  }
+
+  // セルがタップされたときの処理
+  function handleCellTap(cellIndex, ev, myGen) {
+    if (!running || myGen !== gen) return; // 実行中ではない、または古い世代のイベントであれば何もしない
+    
+    if (!isWaitingForTap) {
+      // タップ待ち状態ではないときにタップした場合 (パターン表示中など) はミス
+      miss(ev.clientX, ev.clientY, myGen);
+      return;
+    }
+    
+    clearAllTimeouts(); // 全ての保留中のタイマーをクリア (例: flashDurationタイマー)
+    clearAllCellHighlightsAndFlashes(); // 全てのハイライト/点滅を即座に解除
+
+    isWaitingForTap = false; // プレイヤーがアクションを行ったため、タップ待ち状態を終了
+
+    if (parseInt(cellIndex, 10) === targetCellIndex) {
+      // 正しいセルをタップした場合
+      score += 1;
+      level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+      feedback(ev.clientX, ev.clientY, "+1", "good");
+      render();
+      startNextRound(myGen); // 次のラウンドへ
+    } else {
+      // 間違ったセルをタップした場合
+      miss(ev.clientX, ev.clientY, myGen);
+    }
+  }
+
+  // ミス処理
+  function miss(x, y, myGen) {
+    if (!running || myGen !== gen) return;
+
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+
+    clearAllTimeouts(); // 全てのタイマーをクリア
+    clearAllCellHighlightsAndFlashes(); // 全てのハイライト/点滅をクリア
+
+    if (lives <= 0) {
+      endGame(); // ライフがなくなったらゲームオーバー
+    } else {
+      // ライフがあれば、次のラウンドへ (ミス状態をリセット)
+      isWaitingForTap = false;
+      isPatternPlaying = false;
+      startNextRound(myGen);
+    }
+  }
+
+  // --- ゲームフロー関数 ---
+  function startGame() {
+    clearAllTimeouts(); // 前回のゲームの全てのタイマーを確実にクリア
+    gen += 1; // ゲーム世代をインクリメントし、古いコールバックを無効化
+    var myGen = gen; // このゲームインスタンスの世代をキャプチャ
+
+    gridContainer.innerHTML = ""; // 既存のグリッドをクリア
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフを初期化
+    render();
+    overlay.style.display = "none"; // オーバーレイを非表示
+    running = true; // ゲームを走行中に設定
+    
+    startNextRound(myGen); // 最初のラウンドを開始
+  }
+
+  function startNextRound(myGen) {
+    if (!running || myGen !== gen) return;
+
+    clearAllTimeouts(); // 前回のラウンドのタイマーをクリア
+    clearAllCellHighlightsAndFlashes(); // グリッドをクリーンな状態にする
+
+    adjustDifficulty(); // 難易度を調整
+    createGrid(gridSize); // グリッドを生成 (サイズが変わる可能性あり)
+    generatePattern(); // 新しいパターンを生成
+    playPattern(myGen); // パターンを再生
+  }
+
+  function endGame() {
+    running = false;
+    gen += 1; // 進行中のコールバックを無効化
+    clearAllTimeouts();
+    clearAllCellHighlightsAndFlashes();
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+    hintEl.textContent = "ゲームオーバー"; // HUDのヒントもゲームオーバー表示に
+  }
+
+  // --- イベントリスナー ---
+  startBtn.addEventListener("click", startGame);
+
+  // グリッドコンテナの背景 (セル以外) がタップされた場合の処理
+  gridContainer.addEventListener("pointerdown", function(e) {
+    if (running && !e.target.classList.contains("grid-cell")) {
+      // 走行中で、かつタップされたターゲットがグリッドセルではない場合、ミスとする
+      miss(e.clientX, e.clientY, gen);
+    }
+  });
+
+  // 初期表示
+  render();
+  // ゲーム開始前のヒント (オーバーレイ表示中のヒント)
+  hintEl.textContent = "パターンを覚えて、最後に強く光るセルをタップ！";
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

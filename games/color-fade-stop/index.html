@@ -14,7 +14,9 @@
 
   /* HUD (ヘッドアップディスプレイ) */
   #hud { padding: 12px 16px 8px; background: #16203a; }
-  #stats { display: flex; justify-content: space-between; font-size: 18px; font-weight: bold; }
+  #stats { display: flex; justify-content: space-between; flex-wrap: wrap; font-size: 18px; font-weight: bold; }
+  #stats > span { margin-right: 15px; margin-bottom: 5px;} /* flex-wrap時にも対応 */
+  #stats > span:last-child { margin-right: 0; }
   
   /* ゲーム固有のHUD要素: 常に表示される指示と目標色 */
   #instruction { margin-top: 8px; padding: 10px; text-align: center; background: #556c9d; color: #fff;
@@ -49,6 +51,8 @@
   <div id="hud">
     <div id="stats">
       <span>スコア <span id="score">0</span></span>
+      <span>ラウンド <span id="round">1</span></span>
+      <span>ミス <span id="misses">0</span>/<span id="maxMisses">3</span></span>
       <span>のこり <span id="time">45</span>秒</span>
     </div>
     <div id="instruction">
@@ -62,6 +66,8 @@
     <div id="ovBody">
       <p>画面全体の微妙な色の変化を注意深く観察し、</p>
       <p>上の枠の<b>目標色に完全に一致した</b>と<br>判断した瞬間にタップしよう！</p>
+      <p>ただし、近くなければミス。ミスが3回でゲームオーバー。</p>
+      <p>ラウンドが進むと、色の変化が速くなり、目標色として認める範囲が狭くなるぞ！</p>
       <p>制限時間は45秒。</p>
     </div>
     <button id="startBtn" type="button">スタート</button>
@@ -84,6 +90,11 @@
   var ovBody = document.getElementById("ovBody");
   var startBtn = document.getElementById("startBtn");
 
+  // 新しく追加/変更したDOM要素の参照
+  var roundEl = document.getElementById("round");
+  var missesEl = document.getElementById("misses");
+  var maxMissesEl = document.getElementById("maxMisses");
+
   // ゲーム状態変数
   var score = 0;
   var timeLeft = 0;
@@ -93,6 +104,20 @@
   var animationFrameId = null; // requestAnimationFrameのID
   var clockInterval = null; // setIntervalのID
   var perfectMatchFrameCounter = 0; // 完璧一致が続いているフレーム数
+
+  // 新しいゲーム状態変数と設定
+  var currentRound = 1;
+  var maxMisses = 3; // 許容ミス回数
+  var currentMisses = 0;
+  var roundUpIntervalId = null; // ラウンドアップ用setInterval ID
+  var roundDuration = 15; // 各ラウンドの長さ（秒）
+
+  // ラウンド難易度設定 (初期値、startGameで上書き)
+  var currentMaxColorChangeStep = 1.5; // 色の変化速度の倍率
+  var currentMaxDiffTolerance = 30; // 判定許容誤差 (RGB合計差)
+
+  // 初期表示を設定
+  maxMissesEl.textContent = String(maxMisses);
 
   // ローカルストレージからのベストスコア読み書き
   function loadBest() {
@@ -135,6 +160,55 @@
       return Math.floor(Math.random() * 150) + 50; // 50-199の範囲
   }
 
+  // 次の目標色と現在の画面色を設定
+  function nextColor() {
+    var newTargetColor = {
+        r: randomColorComponent(),
+        g: randomColorComponent(),
+        b: randomColorComponent()
+    };
+
+    // 新しい目標色が現在の目標色と似すぎないように十分な差があるか確認
+    // ある程度の差がないと、次の目標色との違いが分かりづらくなるため
+    while (getDiff(newTargetColor, targetColor) < 150) { // 十分な差がない場合は再生成
+        newTargetColor = {
+            r: randomColorComponent(),
+            g: randomColorComponent(),
+            b: randomColorComponent()
+        };
+    }
+    targetColor = newTargetColor;
+    targetColorBox.style.backgroundColor = rgbToCss(targetColor.r, targetColor.g, targetColor.b);
+
+    // 現在の画面色を目標色から十分に離れたランダムな色で初期化
+    currentColor = {
+        r: Math.max(0, Math.min(255, targetColor.r + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
+        g: Math.max(0, Math.min(255, targetColor.g + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
+        b: Math.max(0, Math.min(255, targetColor.b + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100)))
+    };
+    field.style.backgroundColor = rgbToCss(currentColor.r, currentColor.g, currentColor.b);
+    perfectMatchFrameCounter = 0; // 色がリセットされたらカウンターもリセット
+  }
+
+  // ラウンド難易度を更新する
+  function updateRoundDifficulty() {
+      // ラウンドが進むほど色の変化を速く、判定を厳しく
+      currentMaxColorChangeStep = 1.5 + (currentRound - 1) * 0.5; // 例: 1.5, 2.0, 2.5, 3.0...
+      // 判定許容誤差 (RGB合計差)。最小10まで減少。
+      currentMaxDiffTolerance = Math.max(10, 30 - (currentRound - 1) * 5); // 例: 30, 25, 20, 15...
+
+      nextColor(); // 新しい難易度で次の目標色を設定
+  }
+
+  // 次のラウンドへ移行
+  function nextRound() {
+      if (!running || timeLeft <= 0) return; // ゲームが終了していたら何もしない
+      currentRound++;
+      roundEl.textContent = String(currentRound);
+      updateRoundDifficulty(); // 難易度を更新
+      feedback(field.clientWidth / 2, field.clientHeight / 2 - 50, "ラウンド " + currentRound, "perfect"); // 中央にフィードバック
+  }
+
   // 色変化のロジック (requestAnimationFrameで呼び出される)
   function updateColor() {
     if (!running) {
@@ -143,7 +217,7 @@
     }
 
     var allMatched = true;
-    var maxColorChangeStep = 1.5; // 色が変化する最大のステップ幅
+    var maxColorChangeStep = currentMaxColorChangeStep; // ラウンドに応じて動的な値を使用
 
     ['r', 'g', 'b'].forEach(function(c) {
         if (currentColor[c] === targetColor[c]) {
@@ -193,38 +267,41 @@
     var feedbackText = "";
     var feedbackClass = "";
 
-    // 色の差に応じてスコアとフィードバックを決定
-    if (totalDiff === 0) {
-        points = 200;
-        feedbackText = "PERFECT!";
-        feedbackClass = "perfect";
-    } else if (totalDiff <= 15) { // RGB各成分が平均5程度ずれている
-        points = 80;
-        feedbackText = "EXCELLENT!";
-        feedbackClass = "excellent";
-    } else if (totalDiff <= 40) { // RGB各成分が平均13程度ずれている
-        points = 50;
-        feedbackText = "GOOD!";
-        feedbackClass = "good";
-    } else if (totalDiff <= 100) { // RGB各成分が平均33程度ずれている
-        points = 20;
-        feedbackText = "OK!";
-        feedbackClass = "ok";
-    } else {
-        points = 0;
-        feedbackText = "MISSED";
+    if (totalDiff <= currentMaxDiffTolerance) { // 成功判定
+        if (totalDiff === 0) {
+            points = 200 + currentRound * 10;
+            feedbackText = "PERFECT!";
+            feedbackClass = "perfect";
+        } else if (totalDiff <= currentMaxDiffTolerance / 3) {
+            points = 80 + currentRound * 5;
+            feedbackText = "EXCELLENT!";
+            feedbackClass = "excellent";
+        } else if (totalDiff <= currentMaxDiffTolerance * 2 / 3) {
+            points = 50 + currentRound * 3;
+            feedbackText = "GOOD!";
+            feedbackClass = "good";
+        } else {
+            points = 20 + currentRound * 1;
+            feedbackText = "OK!";
+            feedbackClass = "ok";
+        }
+        setScore(score + points);
+        nextColor(); // 成功したら次の目標色へ
+    } else { // ミス判定
+        currentMisses++;
+        missesEl.textContent = String(currentMisses);
+        points = 0; // ミスではスコア加算なし
+        feedbackText = "ミス！";
         feedbackClass = "bad";
+
+        if (currentMisses >= maxMisses) {
+            endGame("ミス" + maxMisses + "回でゲームオーバー！"); // ゲームオーバー条件を渡す
+        } else {
+            nextColor(); // ミスしても次の目標色へ
+        }
     }
 
-    setScore(score + points);
-    // タップ位置にフィードバックを表示
     feedback(event.clientX, event.clientY, (points > 0 ? "+" : "") + points + "点\n" + feedbackText, feedbackClass);
-
-    // タップ後に現在の色を少しずらして、再度完璧な瞬間を探させる
-    ['r', 'g', 'b'].forEach(function(c) {
-        currentColor[c] = Math.max(0, Math.min(255, targetColor[c] + Math.floor(Math.random() * 21) - 10)); // ±10の範囲でずらす
-    });
-    perfectMatchFrameCounter = 0; // カウンターをリセット
   }
 
   // 1秒ごとのタイマー処理
@@ -232,56 +309,52 @@
     timeLeft -= 1;
     timeEl.textContent = String(Math.max(0, timeLeft));
     if (timeLeft <= 0) {
-      endGame();
+      endGame("タイムアップ！");
     }
   }
 
   // ゲーム開始処理
   function startGame() {
     setScore(0);
+    currentRound = 1;
+    currentMisses = 0;
     timeLeft = GAME_SECONDS;
+
+    // HUD要素の初期化
     timeEl.textContent = String(timeLeft);
+    roundEl.textContent = String(currentRound);
+    missesEl.textContent = String(currentMisses);
 
-    // 目標色をランダムに設定
-    targetColor = {
-        r: randomColorComponent(),
-        g: randomColorComponent(),
-        b: randomColorComponent()
-    };
-    targetColorBox.style.backgroundColor = rgbToCss(targetColor.r, targetColor.g, targetColor.b);
-
-    // 現在の画面色を目標色から十分に離れたランダムな色で初期化
-    currentColor = {
-        r: Math.max(0, Math.min(255, targetColor.r + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
-        g: Math.max(0, Math.min(255, targetColor.g + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100))),
-        b: Math.max(0, Math.min(255, targetColor.b + (Math.random() > 0.5 ? 1 : -1) * (Math.floor(Math.random() * 50) + 100)))
-    };
-    field.style.backgroundColor = rgbToCss(currentColor.r, currentColor.g, currentColor.b);
-    
-    perfectMatchFrameCounter = 0; // カウンターをリセット
     overlay.style.display = "none";
     running = true;
 
     // 既存のアニメーションやタイマーをクリア
     cancelAnimationFrame(animationFrameId);
     clearInterval(clockInterval);
+    clearInterval(roundUpIntervalId);
+
+    // 難易度を初期化して最初の色を設定
+    updateRoundDifficulty();
 
     // 新しいゲームループを開始
     animationFrameId = requestAnimationFrame(updateColor);
     clockInterval = setInterval(tick, 1000);
+    // ラウンドアップタイマーを開始 (最初のラウンドは即開始、その後roundDuration秒ごとに)
+    roundUpIntervalId = setInterval(nextRound, roundDuration * 1000);
   }
 
   // ゲーム終了処理
-  function endGame() {
+  function endGame(reason) { // 理由を受け取る
     running = false;
     cancelAnimationFrame(animationFrameId);
     clearInterval(clockInterval);
+    clearInterval(roundUpIntervalId);
 
     var best = loadBest();
     var isNew = score > best;
     if (isNew) { best = score; saveBest(best); }
 
-    ovTitle.textContent = "タイムアップ!";
+    ovTitle.textContent = reason; // 理由を表示
     ovBody.innerHTML =
       '<p>あなたのスコア</p><div class="big">' + score + '点</div>' +
       '<p>ベスト: ' + best + '点' + (isNew ? "(新記録!)" : "") + '</p>';
@@ -294,6 +367,6 @@
   field.addEventListener("pointerdown", handleTap); // スマホでのタップを考慮
 })();
 </script>
-<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
 </body>
 </html>

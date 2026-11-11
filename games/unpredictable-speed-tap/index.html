@@ -34,9 +34,11 @@
   }
   #stats {
     display: flex;
+    flex-wrap: wrap; /* 要素が多くなっても折り返す */
     justify-content: space-between;
     font-size: 18px;
     font-weight: bold;
+    gap: 8px 16px; /* 行間と列間のギャップ */
   }
   #instructionBox {
     margin-top: 8px;
@@ -155,7 +157,12 @@
 <body>
 <div id="app">
   <div id="hud">
-    <div id="stats"><span>スコア <span id="score">0</span></span><span>のこり <span id="time">45</span>秒</span></div>
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>のこり <span id="time">45</span>秒</span>
+      <span>ミス <span id="missCount">0</span>/3</span>
+    </div>
     <div id="instructionBox">ターゲットが中心円に合わさったらタップ！</div>
   </div>
   <div id="field">
@@ -173,6 +180,7 @@
 
 <script>
 (function () {
+  // ゲーム定数
   var GAME_SECONDS = 45; // 制限時間（秒）
   var PERFECT_HIT_WINDOW = 100; // 判定許容範囲（ミリ秒）
   var TARGET_RADIUS = 30; // 移動ターゲットの半径
@@ -180,11 +188,22 @@
   var SCORE_GOOD = 100; // 成功時のスコア
   var SCORE_BAD = -50; // 失敗時のスコア
 
+  // 速度と難易度に関する定数
+  var BASE_TARGET_SPEED_PX_PER_SEC = 150; // 初期ターゲット速度 (ピクセル/秒)
+  var SPEED_INCREASE_PER_SEC = 2; // 時間経過による速度増加量 (ピクセル/秒/秒)
+  var SPEED_BONUS_PER_HIT = 10; // 成功時の速度ボーナス (ピクセル/秒)
+  var SPEED_PENALTY_PER_MISS = 15; // 失敗時の速度ペナルティ (ピクセル/秒)
+  var MAX_SPEED_BONUS = 200; // プレイヤーの速度ボーナスの最大値
+  var MIN_SPEED_BONUS = -50; // プレイヤーの速度ボーナスの最小値
+  var MAX_MISSES = 3; // 許容ミス回数
+
   // DOM要素の取得
   var field = document.getElementById("field");
   var scoreEl = document.getElementById("score");
   var timeEl = document.getElementById("time");
-  var instructionBox = document.getElementById("instructionBox"); // 指示ボックス（今回は固定メッセージ）
+  var levelEl = document.getElementById("level"); // レベル表示要素
+  var missCountEl = document.getElementById("missCount"); // ミス回数表示要素
+  var instructionBox = document.getElementById("instructionBox");
   var overlay = document.getElementById("overlay");
   var ovTitle = document.getElementById("ovTitle");
   var ovBody = document.getElementById("ovBody");
@@ -197,6 +216,12 @@
   var running = false; // ゲームが実行中か
   var clockInterval = null; // 制限時間のsetIntervalID
   var activeTarget = null; // 現在移動中のターゲットオブジェクトを保持
+
+  // 難易度・進行度に関する変数
+  var currentBaseSpeed = BASE_TARGET_SPEED_PX_PER_SEC; // 時間経過で増える基本速度
+  var playerSpeedBonus = 0; // 成功/失敗で変動する速度ボーナス
+  var missCount = 0; // ミス回数
+  var currentLevel = 1; // 現在のレベル
 
   // ベストスコアの読み込み
   function loadBest() {
@@ -213,6 +238,16 @@
     scoreEl.textContent = String(score);
   }
 
+  // レベル表示の更新
+  function updateLevelDisplay() {
+    // 総合的な実効速度に基づいてレベルを計算
+    // 例えば、初期速度からの増加量100px/sごとに1レベルアップとする
+    var totalEffectiveSpeed = currentBaseSpeed + playerSpeedBonus;
+    currentLevel = 1 + Math.floor((totalEffectiveSpeed - BASE_TARGET_SPEED_PX_PER_SEC) / 30); // 30px/s 増加ごとに1レベル
+    if (currentLevel < 1) currentLevel = 1; // 最低レベルは1
+    levelEl.textContent = String(currentLevel);
+  }
+
   // フィードバック表示（GOOD! / MISS! など）
   function showFeedback(x, y, text, cls) {
     var f = document.createElement("div");
@@ -226,11 +261,11 @@
   }
 
   // ターゲットが中心に到達する予定時刻を計算
-  function calculateArrivalTime(startX, startY, endX, endY, speedPxPerMs) {
+  function calculateArrivalTime(startX, startY, endX, endY, targetSpeedPxPerMs) {
     var dx = endX - startX;
     var dy = endY - startY;
     var distance = Math.sqrt(dx * dx + dy * dy);
-    return Date.now() + (distance / speedPxPerMs); // 現在時刻 + (距離 / 速度) で到達予定時刻
+    return Date.now() + (distance / targetSpeedPxPerMs); // 現在時刻 + (距離 / 速度) で到達予定時刻
   }
 
   // ターゲットを生成しアニメーションを開始
@@ -238,7 +273,7 @@
     if (!running) return;
 
     // 前のターゲットがまだ画面上に存在する場合、タップされずに時間切れとみなしミスにする
-    if (activeTarget) {
+    if (activeTarget && !activeTarget.missed) {
       handleTap(false); // タップなしのミス
       if (!running) return; // endGameでrunningがfalseになる可能性があるので再度チェック
     }
@@ -269,8 +304,11 @@
         break;
     }
 
-    // 速度を不規則に設定 (ピクセル/ミリ秒)
-    var speedPxPerSec = (Math.random() * 0.8 + 0.4) * 180; // 0.4*180=72px/s から 1.2*180=216px/s
+    // ターゲットの速度を計算 (ピクセル/ミリ秒)
+    var effectiveSpeed = currentBaseSpeed + playerSpeedBonus;
+    // ターゲット固有の速度ゆらぎを追加し、最低速度を保証
+    var speedPxPerSec = (Math.random() * 0.4 + 0.8) * effectiveSpeed; // 0.8～1.2倍のゆらぎ
+    speedPxPerSec = Math.max(BASE_TARGET_SPEED_PX_PER_SEC * 0.5, speedPxPerSec); // 最低速度保証
     var speedPxPerMs = speedPxPerSec / 1000;
 
     var arrivalTime = calculateArrivalTime(startX, startY, center.x, center.y, speedPxPerMs);
@@ -289,7 +327,7 @@
       startY: startY,
       endX: center.x,
       endY: center.y,
-      speedPxPerMs: speedPxPerMs,
+      speedPxPerMs: speedPxPerMs, // このターゲット固有の速度
       arrivalTime: arrivalTime,
       startTime: Date.now(),
       missed: false // 既に判定済みか
@@ -361,9 +399,8 @@
     if (isTap) {
       diff = tapTime - activeTarget.arrivalTime;
     } else { // タップなしで時間切れ（中心を通り過ぎた）の場合
-      diff = activeTarget.arrivalTime - Date.now() - PERFECT_HIT_WINDOW - 1; // 許容範囲外の「LATE!」判定として扱う
-      // または、シンプルに大きな負の値にして「MISS!」とする
-      // diff = PERFECT_HIT_WINDOW + 1; // 許容範囲外の「FAST!」判定として扱う
+      // 通り過ぎた時点で「遅すぎた」判定として扱う
+      diff = Date.now() - activeTarget.arrivalTime; // 現在時刻と到達予定時刻の差を正とする
     }
 
     var feedbackX, feedbackY;
@@ -382,6 +419,7 @@
     if (Math.abs(diff) <= PERFECT_HIT_WINDOW) {
       setScore(score + SCORE_GOOD);
       showFeedback(feedbackX, feedbackY, "GOOD!", "good");
+      playerSpeedBonus = Math.min(MAX_SPEED_BONUS, playerSpeedBonus + SPEED_BONUS_PER_HIT);
     } else {
       setScore(score + SCORE_BAD);
       var feedbackText = "MISS!";
@@ -391,8 +429,17 @@
         feedbackText = "LATE!"; // 遅すぎた
       }
       showFeedback(feedbackX, feedbackY, feedbackText, "bad");
+      playerSpeedBonus = Math.max(MIN_SPEED_BONUS, playerSpeedBonus - SPEED_PENALTY_PER_MISS);
+      missCount++;
+      missCountEl.textContent = String(missCount) + "/" + MAX_MISSES; // ミス回数表示更新
+
+      if (missCount >= MAX_MISSES) {
+        endGame("ゲームオーバー!"); // ミス3回でゲームオーバー
+        return; // ゲームオーバーなのでここで処理を終了
+      }
     }
 
+    updateLevelDisplay(); // 速度が変わったのでレベル表示も更新
     removeTarget(activeTarget); // ターゲットを削除
 
     // ゲームが続行中なら次のターゲットを生成
@@ -404,9 +451,13 @@
   // 1秒ごとのタイマー処理
   function tick() {
     timeLeft -= 1;
-    timeEl.textContent = String(Math.max(0, timeLeft)); // 0以下にはならないように表示
+    timeEl.textContent = String(Math.max(0, timeLeft));
+
+    currentBaseSpeed += SPEED_INCREASE_PER_SEC; // 時間経過で基本速度アップ
+    updateLevelDisplay(); // レベル表示更新
+
     if (timeLeft <= 0) {
-      endGame(); // 制限時間切れでゲーム終了
+      endGame("タイムアップ!"); // 制限時間切れでゲーム終了
       return;
     }
   }
@@ -423,11 +474,19 @@
     activeTarget = null; // アクティブターゲットをリセット
     clearInterval(clockInterval); // 既存のタイマーがあればクリア
     clockInterval = setInterval(tick, 1000); // 1秒ごとのタイマーを開始
+
+    // 新しいゲーム変数の初期化
+    currentBaseSpeed = BASE_TARGET_SPEED_PX_PER_SEC;
+    playerSpeedBonus = 0;
+    missCount = 0;
+    missCountEl.textContent = String(missCount) + "/" + MAX_MISSES; // ミス回数表示初期化
+    updateLevelDisplay(); // 初期レベル表示
+
     spawnTarget(); // 最初のターゲットを生成
   }
 
   // ゲーム終了処理
-  function endGame() {
+  function endGame(reasonText) {
     running = false; // ゲーム停止
     // 終了時にアクティブなターゲットがあれば削除
     if (activeTarget) {
@@ -441,7 +500,7 @@
     if (isNew) { best = score; saveBest(best); }
 
     // オーバーレイに結果を表示
-    ovTitle.textContent = "タイムアップ!";
+    ovTitle.textContent = reasonText; // 終了理由を表示
     ovBody.innerHTML =
       '<p>あなたのスコア</p><div class="big">' + score + '点</div>' +
       '<p>ベスト: ' + best + '点' + (isNew ? "(新記録!)" : "") + '</p>';
@@ -457,6 +516,6 @@
   centerTargetEl.style.height = (CENTER_TARGET_RADIUS * 2) + "px";
 })();
 </script>
-<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="https://gc.zgo.at/count.js"></script>
 </body>
 </html>

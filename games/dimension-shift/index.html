@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>二重次元タップ</title>
+<style>
+  /* 全体のリセットと基本スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* HUD (Head-Up Display) */
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+
+  /* ゲームフィールド */
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  /* 次元レイヤーのスタイル */
+  .dimension-layer {
+    position: absolute; inset: 8px; /* フィールドの端から少し内側に表示 */
+    border: 4px solid; border-radius: 12px;
+    transition: all 0.2s ease-out; /* 次元切り替えのアニメーション */
+    pointer-events: none; /* 次元レイヤー自体はタップできないように */
+  }
+  #dimensionA { border-color: #66b3ff; background: rgba(102, 179, 255, 0.1); z-index: 1; }
+  #dimensionB { border-color: #ff9966; background: rgba(255, 153, 102, 0.1); z-index: 0; }
+
+  /* アクティブな次元に応じたフィールドのクラス設定 */
+  /* dim-Aクラスがfieldに付与された場合 */
+  #field.dim-A #dimensionA { opacity: 1; z-index: 2; transform: scale(1); }
+  #field.dim-A #dimensionB { opacity: 0.5; z-index: 1; transform: scale(0.98); } /* 非アクティブ次元は少し縮小 */
+  /* dim-Bクラスがfieldに付与された場合 */
+  #field.dim-B #dimensionB { opacity: 1; z-index: 2; transform: scale(1); }
+  #field.dim-B #dimensionA { opacity: 0.5; z-index: 1; transform: scale(0.98); } /* 非アクティブ次元は少し縮小 */
+
+  /* ターゲットのスタイル */
+  .target {
+    position: absolute; width: 72px; height: 72px; border-radius: 50%;
+    transition: opacity 0.2s ease-out; /* ターゲット表示の切り替えアニメーション */
+    cursor: pointer;
+  }
+  .target[data-dimension="A"] { background: #66b3ff; box-shadow: 0 0 12px #66b3ff; } /* 次元Aのターゲット */
+  .target[data-dimension="B"] { background: #ff9966; box-shadow: 0 0 12px #ff9966; } /* 次元Bのターゲット */
+
+  /* アクティブな次元に応じたターゲットの表示/非表示 */
+  /* dim-Aクラスがfieldに付与された場合 */
+  #field.dim-A .target[data-dimension="A"] { opacity: 1; pointer-events: auto; } /* 次元Aのターゲットは見える、タップ可能 */
+  #field.dim-A .target[data-dimension="B"] { opacity: 0.2; pointer-events: none; } /* 次元Bのターゲットは見えない、タップ不可 */
+  /* dim-Bクラスがfieldに付与された場合 */
+  #field.dim-B .target[data-dimension="B"] { opacity: 1; pointer-events: auto; } /* 次元Bのターゲットは見える、タップ可能 */
+  #field.dim-B .target[data-dimension="A"] { opacity: 0.2; pointer-events: none; } /* 次元Aのターゲットは見えない、タップ不可 */
+
+  /* ターゲットヒット時のアニメーション */
+  .target.hit { animation: pop .2s ease-out forwards; pointer-events: none; }
+  @keyframes pop { to { transform: scale(1.7); opacity: 0; } }
+
+  /* フィードバックメッセージ */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイ (スタート画面・ゲームオーバー画面) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">タップで次元を切り替え、見える丸を回収！</div>
+  </div>
+  <div id="field">
+    <div id="dimensionA" class="dimension-layer"></div>
+    <div id="dimensionB" class="dimension-layer"></div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">二重次元タップ</h1>
+    <div id="ovBody">
+      <p>画面には2つの次元が重なっているよ。</p>
+      <p>ゲームフィールドをタップして<b>次元</b>を切り替えよう！</p>
+      <p>現在の次元に<b>見える丸</b>をタップして回収！<br>見えない丸はタップできないよ。</p>
+      <p>回収しそこねたり、何もない所をタップすると<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、難しくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+  var hintEl = document.getElementById("hint");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var targetSpawnTimer = null;
+  var currentDimension = 'A'; // 現在アクティブな次元 ('A' または 'B')
+  var activeTargets = []; // 画面上に存在するターゲットオブジェクトの配列
+
+  // ゲームの難易度調整用定数
+  var MAX_TARGETS_BASE = 2; // 基本の最大同時出現ターゲット数
+  var MAX_TARGETS_PER_LEVEL = 1; // レベルごとの追加最大ターゲット数
+  var SPAWN_INTERVAL_BASE_MS = 1500; // ターゲット出現間隔の初期値 (ミリ秒)
+  var SPAWN_INTERVAL_DECREASE_MS = 80; // レベルごとの出現間隔減少量
+  var TARGET_LIFE_BASE_MS = 2000; // ターゲット寿命の初期値 (ミリ秒)
+  var TARGET_LIFE_DECREASE_MS = 120; // レベルごとのターゲット寿命減少量
+  var SCORE_PER_LEVEL = 5; // レベルアップに必要なスコア
+
+  // ベストスコアの保存・読み込み
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("dimension_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("dimension_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの情報を更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // DOM要素を削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // フィードバックメッセージ表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // 次元表示とヒントテキストを更新
+  function updateDimensionDisplay() {
+    field.classList.remove('dim-A', 'dim-B');
+    field.classList.add('dim-' + currentDimension);
+    hintEl.textContent = 'タップで次元を切り替え、' + (currentDimension === 'A' ? '青い丸' : 'オレンジの丸') + 'を回収！';
+  }
+
+  // 次元を切り替え
+  function switchDimension() {
+    currentDimension = (currentDimension === 'A' ? 'B' : 'A');
+    updateDimensionDisplay();
+  }
+
+  // ターゲットをタップした際の処理
+  function hitTarget(targetObj, ev) {
+    if (!running || targetObj.el.classList.contains('hit')) return; // 二重タップ防止
+
+    // 間違った次元のターゲットをタップしたらミス
+    if (targetObj.dim !== currentDimension) {
+      var r = field.getBoundingClientRect();
+      miss(ev.clientX - r.left, ev.clientY - r.top);
+      return;
+    }
+
+    clearTimeout(targetObj.timerId); // ターゲットの寿命タイマーをクリア
+    targetObj.el.classList.add("hit"); // ヒットアニメーションを開始
+
+    // フィードバック表示位置の計算
+    var x = parseFloat(targetObj.el.style.left) + targetObj.el.offsetWidth / 2;
+    var y = parseFloat(targetObj.el.style.top) + targetObj.el.offsetHeight / 2;
+    feedback(x, y, "+1", "good");
+
+    score += 1;
+    level = 1 + Math.floor(score / SCORE_PER_LEVEL); // スコアに応じてレベルアップ
+    render();
+
+    // アニメーション後にDOMと配列から削除
+    setTimeout(function () {
+      removeEl(targetObj.el);
+      activeTargets = activeTargets.filter(function(t) { return t !== targetObj; });
+    }, 220); // CSSアニメーションの時間に合わせる
+  }
+
+  // ターゲット生成
+  function spawnTarget(myGen) {
+    if (!running || myGen !== gen) return;
+
+    // 現在のレベルに応じた最大同時出現ターゲット数を計算
+    var maxActive = MAX_TARGETS_BASE + (level - 1) * MAX_TARGETS_PER_LEVEL;
+    if (activeTargets.length >= maxActive) {
+      // 最大数に達していたら、少し待ってから再試行
+      targetSpawnTimer = setTimeout(function () { spawnTarget(myGen); }, 100);
+      return;
+    }
+
+    var rect = field.getBoundingClientRect();
+    var size = 72; // ターゲットのサイズ
+    var padding = 16; // フィールド端からのパディング
+    // ランダムな位置を計算
+    var x = Math.floor(Math.random() * Math.max(1, rect.width - size - padding * 2)) + padding;
+    var y = Math.floor(Math.random() * Math.max(1, rect.height - size - padding * 2)) + padding;
+    var targetDim = Math.random() < 0.5 ? 'A' : 'B'; // ランダムな次元に属させる
+
+    var el = document.createElement("div");
+    el.className = "target";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.setAttribute('data-dimension', targetDim); // ターゲットの属する次元を設定
+
+    var targetObj = {
+      el: el,
+      timerId: null, // 寿命タイマーのID
+      dim: targetDim,
+      x: x + size / 2, // フィードバック表示用の中央座標
+      y: y + size / 2
+    };
+
+    // ターゲットのタップイベント
+    el.addEventListener("pointerdown", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation(); // フィールドのpointerdownイベントが発火しないようにする
+      hitTarget(targetObj, ev);
+    });
+    field.appendChild(el);
+    activeTargets.push(targetObj); // ターゲットを管理配列に追加
+
+    // 現在のレベルに応じたターゲットの寿命を計算
+    var lifeMs = Math.max(650, TARGET_LIFE_BASE_MS - (level - 1) * TARGET_LIFE_DECREASE_MS);
+    targetObj.timerId = setTimeout(function () {
+      // 寿命が尽きたらミス
+      if (activeTargets.indexOf(targetObj) !== -1) { // まだ画面上に存在していれば
+        removeEl(targetObj.el);
+        activeTargets = activeTargets.filter(function(t) { return t !== targetObj; });
+        if (myGen === gen) miss(targetObj.x, targetObj.y);
+      }
+    }, lifeMs);
+
+    // 現在のレベルに応じた次のターゲット出現間隔を計算
+    var nextSpawnMs = Math.max(420, SPAWN_INTERVAL_BASE_MS - (level - 1) * SPAWN_INTERVAL_DECREASE_MS);
+    targetSpawnTimer = setTimeout(function () { spawnTarget(myGen); }, nextSpawnMs);
+  }
+
+  // フィールド全体のタップイベント（次元切り替え）
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+
+    // ターゲットではない場所をタップした場合、これをミスとして処理する
+    // targetのpointerdownイベント内でstopPropagation()が呼ばれるため、
+    // ここに到達するev.targetは必ずターゲット要素ではない（fieldまたはdimension-layer）。
+    // よって、このイベントが発火したこと自体が「何もない場所のタップ」とみなせる。
+    var r = field.getBoundingClientRect();
+    miss(ev.clientX - r.left, ev.clientY - r.top);
+
+    // その上で、次元の切り替えも行う。
+    // 「何もない所のタップ」がミスになる要件と、「フィールドをタップして次元を切り替える」要件を両立。
+    switchDimension();
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    gen += 1;
+    var myGen = gen;
+    clearTimeout(targetSpawnTimer);
+
+    // 既存の全てのターゲットをクリア
+    activeTargets.forEach(function(t) { clearTimeout(t.timerId); removeEl(t.el); });
+    activeTargets = [];
+
+    // ゲーム状態をリセット
+    score = 0; level = 1; lives = 3;
+    currentDimension = 'A'; // 次元Aからスタート
+    render();
+    updateDimensionDisplay(); // 初期次元表示を適用
+    overlay.style.display = "none";
+    running = true;
+
+    // ターゲット生成開始
+    targetSpawnTimer = setTimeout(function () { spawnTarget(myGen); }, 500);
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false;
+    gen += 1; // 全てのタイマーを無効化
+    clearTimeout(targetSpawnTimer);
+
+    // 既存の全てのターゲットを即座にクリア
+    activeTargets.forEach(function(t) { clearTimeout(t.timerId); removeEl(t.el); });
+    activeTargets = [];
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); } // ベストスコア更新
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  // スタートボタンのイベントリスナー
+  startBtn.addEventListener("click", startGame);
+
+  // 初期描画と次元表示の更新
+  render();
+  updateDimensionDisplay();
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

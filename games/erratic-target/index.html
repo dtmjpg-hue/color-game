@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>フワフワボールタップ</title>
+<style>
+  /* 全体設定 */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #14213d; /* 背景色 */
+    color: #fff; /* 文字色 */
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; /* スクロールやピンチズームを防ぐ */
+    user-select: none; -webkit-user-select: none; /* テキスト選択を防ぐ */
+  }
+
+  /* アプリの基本レイアウト */
+  #app {
+    position: fixed;
+    inset: 0; /* 画面全体にフィット */
+    display: flex;
+    flex-direction: column; /* 縦方向に要素を並べる */
+  }
+
+  /* HUD (スコア、ライフなどの表示エリア) */
+  #hud {
+    padding: 10px 14px;
+    background: #0d1730;
+  }
+  #stats {
+    display: flex;
+    justify-content: space-between; /* 要素を左右に配置 */
+    font-size: 17px;
+    font-weight: bold;
+  }
+  #hint {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 15px;
+    color: #ffd166; /* 注意を引く色 */
+  }
+
+  /* ゲームフィールド */
+  #field {
+    position: relative;
+    flex: 1; /* 残りのスペースを埋める */
+    overflow: hidden; /* ボールがフィールド外に出ないように */
+  }
+
+  /* ボール */
+  .ball {
+    position: absolute;
+    border-radius: 50%; /* 円形 */
+    background: #0077b6; /* 青色のボール */
+    box-shadow: 0 0 10px rgba(0, 119, 182, 0.5); /* 影で立体感を出す */
+    transition: box-shadow 0.2s ease-out; /* 光るときの滑らかな変化 */
+  }
+  /* 光っているボールのスタイル */
+  .ball.glowing {
+    background: #ffd166; /* 光る色 */
+    box-shadow: 0 0 20px #ffd166, 0 0 40px rgba(255, 209, 102, 0.7); /* 強調された影 */
+  }
+  /* タップされたボールのアニメーション */
+  .ball.hit {
+    animation: pop .2s ease-out forwards; /* 拡大して消えるアニメーション */
+    pointer-events: none; /* アニメーション中はタップを受け付けない */
+  }
+  @keyframes pop {
+    0% { transform: scale(1); opacity: 1; }
+    100% { transform: scale(1.7); opacity: 0; } /* 拡大して透明になる */
+  }
+
+  /* フィードバック表示 (+1, ミス! など) */
+  .fb {
+    position: absolute;
+    font-size: 22px;
+    font-weight: bold;
+    pointer-events: none; /* マウスイベントを無視 */
+    animation: rise .6s ease-out forwards; /* 浮き上がるアニメーション */
+    z-index: 5; /* ボールより手前に表示 */
+  }
+  .good { color: #7dffa0; } /* 成功時の色 */
+  .bad { color: #ff7d7d; }  /* 失敗時の色 */
+  @keyframes rise {
+    to { transform: translateY(-36px); opacity: 0; } /* 上に移動しつつ透明になる */
+  }
+
+  /* オーバーレイ (スタート画面、ゲームオーバー画面) */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(8,14,30,.95); /* 半透明の暗い背景 */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    z-index: 10; /* 最前面に表示 */
+  }
+  #overlay h1 {
+    font-size: 28px;
+    margin: 0 0 14px;
+  }
+  #overlay p {
+    font-size: 17px;
+    line-height: 1.7;
+    margin: 4px 0;
+    max-width: 320px;
+  }
+  .big {
+    font-size: 44px;
+    font-weight: bold;
+    color: #ffd166; /* 強調色 */
+    margin: 6px 0;
+  }
+  button {
+    margin-top: 22px;
+    min-width: 200px;
+    min-height: 56px;
+    padding: 14px 36px;
+    font-size: 22px;
+    font-weight: bold;
+    color: #3a2a00;
+    background: #ffd166;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">光るボールをタップ！ミスするとライフが減るよ</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">フワフワボールタップ</h1>
+    <div id="ovBody">
+      <p>画面内で動き回る<b>光るボール</b>をタップして消そう！</p>
+      <p>光っていないボールや何もない場所をタップしたり、<br>光るボールを時間内にタップし損ねると<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、はやくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // --- DOM要素の取得 ---
+  const field = document.getElementById("field");
+  const scoreEl = document.getElementById("score");
+  const levelEl = document.getElementById("level");
+  const lifeEl = document.getElementById("life");
+  const hintEl = document.getElementById("hint");
+  const overlay = document.getElementById("overlay");
+  const ovTitle = document.getElementById("ovTitle");
+  const ovBody = document.getElementById("ovBody");
+  const startBtn = document.getElementById("startBtn");
+
+  // --- ゲーム状態変数 ---
+  let score = 0;
+  let level = 1;
+  let lives = 3;
+  let running = false;
+  let gen = 0; // ゲーム世代カウンター。リセット時にインクリメントし、古いタイマーやイベントを無効化する
+
+  // --- ボール関連 ---
+  const balls = []; // 画面上のすべてのボールオブジェクトを管理
+  let nextBallId = 0; // ボールに一意のIDを割り当てるためのカウンター
+  let activeBallId = null; // 現在光っている（タップすべき）ボールのID
+
+  // --- タイマー関連 ---
+  let animationFrameId = null; // requestAnimationFrameのID
+  let glowTimer = null; // 次のボールを光らせるためのsetTimeout ID
+  let missTimer = null; // 光っているボールをタップし損ねた場合のミス判定用setTimeout ID
+  let lastFrameTime = 0; // requestAnimationFrameのdeltaTime（フレーム間隔）計算用
+
+  // --- ゲーム設定 ---
+  const INITIAL_BALLS = 1; // ゲーム開始時のボールの数
+  const MAX_BALLS = 7; // 画面上のボールの最大数
+  const BALL_SIZE = 60; // ボールの直径 (px)
+  const INITIAL_SPEED = 80; // px/sec (レベル1の基本速度)
+  const LEVEL_UP_SCORE = 5; // この点数ごとにレベルが上がる
+
+  // --- ヘルパー関数 ---
+
+  // 指定範囲内の乱数を生成
+  function getRandom(min, max) { return Math.random() * (max - min) + min; }
+
+  // 要素をDOMから削除
+  function removeEl(el) {
+    if (el && el.parentNode) {
+      el.parentNode.removeChild(el);
+    }
+  }
+
+  // フィードバック表示（+1, ミス! など）
+  function feedback(x, y, text, cls) {
+    const f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // field内での相対位置で表示
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650); // 0.65秒後に削除
+  }
+
+  // ベストスコアの読み込み
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("fuwafuwa_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+
+  // ベストスコアの保存
+  function saveBest(v) {
+    try { localStorage.setItem("fuwafuwa_best", String(v)); } catch (e) {}
+  }
+
+  // --- ゲームロジック ---
+
+  // HUDのスコア、レベル、ライフを更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    let hearts = "";
+    for (let i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡"); // 残りライフに応じてハートを表示
+    lifeEl.textContent = hearts;
+  }
+
+  // ミス発生時の処理
+  function miss(x, y, currentGen) {
+    // ゲームが実行中でないか、世代が異なる場合は処理しない
+    if (!running || currentGen !== gen) return;
+
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad"); // ミス表示
+    render(); // ライフを更新
+
+    // 現在光っているボールを非アクティブにする（あれば）
+    if (activeBallId !== null) {
+      const activeBall = balls.find(b => b.id === activeBallId);
+      if (activeBall) {
+        activeBall.isGlowing = false;
+        activeBall.el.classList.remove("glowing");
+      }
+      activeBallId = null; // アクティブなボールを解除
+    }
+    clearTimeout(missTimer); // ミスタイマーをクリア
+    clearTimeout(glowTimer); // 次の光るボールをスケジュールするタイマーもクリア
+
+    if (lives <= 0) {
+      endGame(); // ライフがなくなったらゲームオーバー
+    } else {
+      scheduleNextGlow(); // 次のボールを光らせる
+    }
+  }
+
+  // 新しいボールオブジェクトを作成し、フィールドに追加
+  function createBall() {
+    const id = nextBallId++;
+    const rect = field.getBoundingClientRect();
+    
+    // 初期位置をフィールド内にランダムに設定
+    const x = getRandom(0, rect.width - BALL_SIZE);
+    const y = getRandom(0, rect.height - BALL_SIZE);
+
+    // 初期速度をレベルに応じてランダムに設定
+    const speedFactor = 1 + (level - 1) * 0.15; // レベルが上がると速度係数が増加
+    const currentSpeed = INITIAL_SPEED * speedFactor;
+    const angle = getRandom(0, Math.PI * 2); // ランダムな移動角度
+    const vx = Math.cos(angle) * currentSpeed; // x方向の速度
+    const vy = Math.sin(angle) * currentSpeed; // y方向の速度
+
+    const el = document.createElement("div");
+    el.className = "ball";
+    el.style.width = BALL_SIZE + "px";
+    el.style.height = BALL_SIZE + "px";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    
+    // ボールへのタップイベントリスナー
+    el.addEventListener("pointerdown", function(ev) {
+      ev.preventDefault(); // デフォルトのイベント（スクロールなど）を防ぐ
+      ev.stopPropagation(); // fieldへのイベント伝播を防ぐ
+      // ゲームが実行中でないか、世代が異なる場合は処理しない
+      if (!running || gen !== gen) return;
+
+      const ball = balls.find(b => b.el === el);
+      if (!ball) return; // 既に削除されたボールなど
+
+      // フィードバック表示位置をボールの中心に設定
+      const fbX = ball.x + BALL_SIZE / 2;
+      const fbY = ball.y + BALL_SIZE / 2;
+
+      if (ball.isGlowing) {
+        // 成功！
+        score += 1;
+        level = 1 + Math.floor(score / LEVEL_UP_SCORE); // スコアに応じてレベルアップ
+        feedback(fbX, fbY, "+1", "good"); // 得点表示
+        
+        // タップされたボールをアニメーション後削除
+        ball.el.classList.add("hit");
+        removeBall(ball.id); // 配列からもDOMからも削除
+
+        // 新しいボールを追加（最大数を超えないように）
+        const currentMaxBalls = Math.min(MAX_BALLS, INITIAL_BALLS + level - 1);
+        if (balls.length < currentMaxBalls || balls.length === 0) {
+           createBall();
+        }
+
+        // アクティブボールを解除し、次のボールをスケジュール
+        activeBallId = null;
+        clearTimeout(missTimer);
+        clearTimeout(glowTimer);
+        scheduleNextGlow();
+        render(); // スコア、レベル更新
+      } else {
+        // 光っていないボールをタップ -> ミス
+        miss(fbX, fbY, gen);
+      }
+    });
+
+    field.appendChild(el); // フィールドにボールを追加
+    balls.push({ id, el, x, y, vx, vy, isGlowing: false }); // ボール情報を配列に保存
+    return el;
+  }
+
+  // ボールオブジェクトとDOM要素を削除
+  function removeBall(id) {
+    const index = balls.findIndex(b => b.id === id);
+    if (index > -1) {
+      const ball = balls[index];
+      removeEl(ball.el); // DOMから要素を削除
+      balls.splice(index, 1); // 配列からオブジェクトを削除
+    }
+  }
+
+  // すべてのボールの位置と速度を更新
+  function updateBalls(deltaTime) {
+    const rect = field.getBoundingClientRect();
+    const fieldWidth = rect.width;
+    const fieldHeight = rect.height;
+
+    for (let i = balls.length - 1; i >= 0; i--) {
+      const ball = balls[i];
+
+      ball.x += ball.vx * deltaTime;
+      ball.y += ball.vy * deltaTime;
+
+      // 左右の壁との衝突判定と反射
+      if (ball.x <= 0) {
+        ball.x = 0;
+        ball.vx *= -1; // 速度を反転
+      } else if (ball.x + BALL_SIZE >= fieldWidth) {
+        ball.x = fieldWidth - BALL_SIZE;
+        ball.vx *= -1;
+      }
+
+      // 上下の壁との衝突判定と反射
+      if (ball.y <= 0) {
+        ball.y = 0;
+        ball.vy *= -1; // 速度を反転
+      } else if (ball.y + BALL_SIZE >= fieldHeight) {
+        ball.y = fieldHeight - BALL_SIZE;
+        ball.vy *= -1;
+      }
+
+      // DOM要素の位置を更新
+      ball.el.style.left = ball.x + "px";
+      ball.el.style.top = ball.y + "px";
+    }
+  }
+
+  // 次のボールを光らせるスケジュールを設定
+  function scheduleNextGlow() {
+    // ゲームが実行中でないか、ライフがないか、ボールがない場合は処理しない
+    if (!running || lives <= 0 || balls.length === 0) return;
+    const currentGen = gen; // タイマー登録時のゲーム世代をキャプチャ
+
+    // 現在光っているボールを非アクティブにする（あれば）
+    if (activeBallId !== null) {
+      const currentActiveBall = balls.find(b => b.id === activeBallId);
+      if (currentActiveBall) {
+        currentActiveBall.isGlowing = false;
+        currentActiveBall.el.classList.remove("glowing");
+      }
+      activeBallId = null;
+    }
+    clearTimeout(missTimer); // 既存のミスタイマーをクリア
+
+    // レベルに応じて光る間隔を調整（最小800ms）
+    const glowIntervalMs = Math.max(800, 2000 - (level - 1) * 100);
+
+    glowTimer = setTimeout(function() {
+      // 処理実行時にゲームが実行中か、世代が一致するかを確認
+      if (!running || lives <= 0 || balls.length === 0 || currentGen !== gen) return;
+
+      // 現在アクティブでないボールの中から次のターゲットを選ぶ
+      const availableBalls = balls.filter(b => b.id !== activeBallId);
+      if (availableBalls.length === 0) {
+         // 光らせるボールがない場合（例: すべてのボールが削除された後など）、再スケジュール
+         scheduleNextGlow();
+         return;
+      }
+
+      const nextActiveBall = availableBalls[Math.floor(Math.random() * availableBalls.length)];
+      nextActiveBall.isGlowing = true;
+      nextActiveBall.el.classList.add("glowing");
+      activeBallId = nextActiveBall.id;
+
+      // レベルに応じて光っている時間を調整（最小500ms）
+      const glowDurationMs = Math.max(500, 1500 - (level - 1) * 120);
+
+      // 光っているボールをタップし損ねた場合のミス判定タイマー
+      missTimer = setTimeout(function() {
+        // 処理実行時にまだこのボールがアクティブで、ゲームが実行中か、世代が一致するかを確認
+        if (activeBallId === nextActiveBall.id && running && lives > 0 && currentGen === gen) {
+          miss(nextActiveBall.x + BALL_SIZE / 2, nextActiveBall.y + BALL_SIZE / 2, currentGen);
+        }
+      }, glowDurationMs);
+
+    }, glowIntervalMs);
+  }
+
+  // ゲームのアニメーションループ
+  function gameLoop(currentTime) {
+    if (!running) {
+      animationFrameId = null; // ゲームが停止したらループを終了
+      return;
+    }
+
+    const deltaTime = (currentTime - lastFrameTime) / 1000; // 前回のフレームからの経過時間（秒）
+    lastFrameTime = currentTime; // 現在時刻を更新
+
+    updateBalls(deltaTime); // ボールの位置を更新
+
+    animationFrameId = requestAnimationFrame(gameLoop); // 次のフレームを要求
+  }
+
+  // ゲームのリセット（「もういちど」ボタン用）
+  function resetGame() {
+    cancelAnimationFrame(animationFrameId); // アニメーションループを停止
+    clearTimeout(glowTimer); // 光るボールのタイマーをクリア
+    clearTimeout(missTimer); // ミス判定タイマーをクリア
+
+    // 既存のすべてのボールを削除
+    balls.forEach(ball => removeEl(ball.el));
+    balls.length = 0; // ボール配列を空にする
+
+    // ゲーム状態を初期値に戻す
+    score = 0;
+    level = 1;
+    lives = 3;
+    activeBallId = null;
+    nextBallId = 0; // ボールIDカウンターもリセット
+    running = false;
+    gen += 1; // ゲーム世代をインクリメントし、古いイベントを無効化
+  }
+
+  // ゲーム開始処理
+  function startGame() {
+    resetGame(); // まずゲームを初期状態にリセット
+    // genはresetGameでインクリメント済み
+
+    overlay.style.display = "none"; // オーバーレイを非表示にする
+    running = true; // ゲームを走行中に設定
+    lastFrameTime = performance.now(); // アニメーションループの基準時間を初期化
+
+    // 初期ボールを生成
+    for (let i = 0; i < INITIAL_BALLS; i++) {
+      createBall();
+    }
+    
+    animationFrameId = requestAnimationFrame(gameLoop); // アニメーションループを開始
+
+    scheduleNextGlow(); // 最初の光るボールをスケジュール
+    render(); // HUDを初期表示
+  }
+
+  // ゲームオーバー処理
+  function endGame() {
+    running = false; // ゲームを停止
+    cancelAnimationFrame(animationFrameId); // アニメーションループを停止
+    clearTimeout(glowTimer); // 光るボールのタイマーをクリア
+    clearTimeout(missTimer); // ミス判定タイマーをクリア
+    activeBallId = null; // アクティブなボールを解除
+    gen += 1; // ゲーム世代をインクリメントし、残りのタイマーやイベントを無効化
+
+    const best = loadBest(); // ベストスコアを読み込む
+    const isNew = score > best; // 新記録かどうか
+    if (isNew) { best = score; saveBest(best); } // 新記録なら保存
+
+    // ゲームオーバー画面のテキストを設定
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど"; // ボタンのテキストを「もういちど」に変更
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  // フィールド（背景）のタップイベントリスナー
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return; // ゲームが実行中でない場合は何もしない
+    const r = field.getBoundingClientRect();
+    // クリックされた位置をフィールド内の相対座標に変換してmiss関数に渡す
+    miss(ev.clientX - r.left, ev.clientY - r.top, gen);
+  });
+
+  // 「スタート」/「もういちど」ボタンのイベントリスナー
+  startBtn.addEventListener("click", startGame);
+
+  // 初回表示のレンダリング
+  render();
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
+```

@@ -1,0 +1,435 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ルールチェンジタップ</title>
+<style>
+  /* 基本設定 */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: #14213d;
+    color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  #app {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* HUD (ヘッドアップディスプレイ) */
+  #hud {
+    padding: 10px 14px;
+    background: #0d1730;
+  }
+  #stats {
+    display: flex;
+    justify-content: space-between;
+    font-size: 17px;
+    font-weight: bold;
+  }
+  #hint {
+    margin-top: 6px;
+    text-align: center;
+    font-size: 15px;
+    color: #ffd166;
+  }
+
+  /* ゲームフィールド */
+  #field {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* 図形スタイル */
+  .shape {
+    position: absolute;
+    width: 72px;
+    height: 72px;
+    border: 3px solid transparent; /* 枠線 */
+    pointer-events: auto; /* タップ可能にする */
+    will-change: transform, opacity; /* アニメーションの最適化 */
+  }
+  .shape.circle {
+    border-radius: 50%;
+  }
+  .shape.square {
+    border-radius: 8px; /* 角丸四角形 */
+  }
+  .shape.triangle {
+    clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+    width: 80px; /* 三角形は少し幅広に */
+    height: 72px;
+  }
+
+  /* 図形の色 */
+  .color-red { background: #e76f51; border-color: #e76f51; }
+  .color-blue { background: #2a9d8f; border-color: #2a9d8f; }
+  .color-green { background: #8ecae6; border-color: #8ecae6; }
+  .color-yellow { background: #f4a261; border-color: #f4a261; }
+  .color-purple { background: #9b59b6; border-color: #9b59b6; }
+
+  /* フィードバック (得点・ミス表示) */
+  .fb {
+    position: absolute;
+    font-size: 22px;
+    font-weight: bold;
+    pointer-events: none; /* クリックイベントをブロックしない */
+    animation: rise .6s ease-out forwards;
+  }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise {
+    to { transform: translateY(-36px); opacity: 0; }
+  }
+
+  /* オーバーレイ (ゲーム開始/終了画面) */
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(8,14,30,.95);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+    z-index: 10;
+  }
+  #overlay h1 {
+    font-size: 28px;
+    margin: 0 0 14px;
+  }
+  #overlay p {
+    font-size: 17px;
+    line-height: 1.7;
+    margin: 4px 0;
+    max-width: 320px;
+  }
+  .big {
+    font-size: 44px;
+    font-weight: bold;
+    color: #ffd166;
+    margin: 6px 0;
+  }
+  button {
+    margin-top: 22px;
+    min-width: 200px;
+    min-height: 56px;
+    padding: 14px 36px;
+    font-size: 22px;
+    font-weight: bold;
+    color: #3a2a00;
+    background: #ffd166;
+    border: none;
+    border-radius: 14px;
+    cursor: pointer;
+    -webkit-appearance: none; /* iOSボタンのデフォルトスタイルをリセット */
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">遊び方</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ルールチェンジタップ</h1>
+    <div id="ovBody">
+      <p>画面上部の<b>ルール</b>に従って、<b>図形</b>をタップしよう！</p>
+      <p>ルールは<b>時間とともに変化</b>するよ。素早く認識して正確にタップ！</p>
+      <p>間違った図形や何もない所をタップすると<b>ミス</b>。ライフは3つ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var hintEl = document.getElementById("hint");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var spawnTimer = null; // 図形生成のタイマー
+  var ruleChangeTimer = null; // ルール変更のタイマー
+
+  var shapes = ["circle", "square", "triangle"];
+  var colors = ["red", "blue", "green", "yellow", "purple"];
+  var currentRule = {}; // 現在のルール例: { shape: "circle", color: "red" }
+
+  // 表示用の名前マッピング
+  var shapeNames = {
+    "circle": "円",
+    "square": "四角",
+    "triangle": "三角"
+  };
+  var colorNames = {
+    "red": "赤い",
+    "blue": "青い",
+    "green": "緑の",
+    "yellow": "黄色の",
+    "purple": "紫の"
+  };
+
+  // 配列からランダムな要素を取得
+  function getRandom(arr) {
+    return arr[Math.floor(Math.random() * arr.length)];
+  }
+
+  // ベストスコアの保存・読み込み (localStorage)
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("rule_change_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("rule_change_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの表示を更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // ルール表示を更新
+  function updateHint() {
+    var hintText = "";
+    if (currentRule.shape && currentRule.color) {
+      hintText = colorNames[currentRule.color] + shapeNames[currentRule.shape] + "をタップ！";
+    } else if (currentRule.shape) {
+      hintText = shapeNames[currentRule.shape] + "をタップ！";
+    } else if (currentRule.color) {
+      hintText = colorNames[currentRule.color] + "図形をタップ！";
+    }
+    hintEl.textContent = hintText;
+  }
+
+  // 新しいルールを生成
+  function generateNewRule() {
+    var newRule = {};
+    var type; // 0: shape+color, 1: shape only, 2: color only
+    
+    // 現在のルールと異なるルールが生成されるまで試行
+    var attempts = 0;
+    while (attempts < 10) { 
+      type = Math.floor(Math.random() * 3); // 0, 1, 2 のいずれか
+      newRule = {};
+      if (type === 0) { // 形状と色
+        newRule.shape = getRandom(shapes);
+        newRule.color = getRandom(colors);
+      } else if (type === 1) { // 形状のみ
+        newRule.shape = getRandom(shapes);
+      } else { // 色のみ
+        newRule.color = getRandom(colors);
+      }
+
+      // 新しいルールが現在のルールと異なるかチェック
+      var isSameRule = (currentRule.shape === newRule.shape && currentRule.color === newRule.color);
+      if (!isSameRule) break;
+      attempts++;
+    }
+    currentRule = newRule;
+    updateHint();
+  }
+
+  // DOM要素を削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // 画面にフィードバック表示 (+1, ミス!)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // 図形が現在のルールに合致するか判定
+  function isCorrectTap(shapeEl) {
+    var shapeType = shapeEl.dataset.shape;
+    var shapeColor = shapeEl.dataset.color;
+
+    var correct = true;
+    if (currentRule.shape && currentRule.shape !== shapeType) {
+      correct = false;
+    }
+    if (currentRule.color && currentRule.color !== shapeColor) {
+      correct = false;
+    }
+    return correct;
+  }
+
+  // 図形を生成
+  function spawn(myGen) {
+    if (!running || myGen !== gen) return;
+    var rect = field.getBoundingClientRect();
+    var baseSize = 72; // 円・四角形の基本サイズ
+    var triangleSizeX = 80;
+    var triangleSizeY = 72;
+
+    var elShape = getRandom(shapes);
+    var elColor = getRandom(colors);
+
+    // 形状に応じたサイズを適用
+    var currentShapeSizeX = (elShape === "triangle") ? triangleSizeX : baseSize;
+    var currentShapeSizeY = (elShape === "triangle") ? triangleSizeY : baseSize;
+
+    // ランダムな位置を決定
+    var x = Math.floor(Math.random() * Math.max(1, rect.width - currentShapeSizeX));
+    var y = Math.floor(Math.random() * Math.max(1, rect.height - currentShapeSizeY));
+
+    // 図形要素の作成
+    var el = document.createElement("div");
+    el.className = "shape " + elShape + " color-" + elColor;
+    el.dataset.shape = elShape; // 形状データをカスタム属性として保持
+    el.dataset.color = elColor; // 色データをカスタム属性として保持
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    var done = false; // タップ済みか、時間切れかを判定するフラグ
+
+    el.addEventListener("pointerdown", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation(); // フィールド全体のイベントに伝播させない
+      if (done || !running || myGen !== gen) return; // 既に処理済みか、ゲーム終了済みなら何もしない
+      done = true;
+      removeEl(el); // タップされたらすぐに削除
+
+      var r = field.getBoundingClientRect();
+      var tapX = ev.clientX - r.left;
+      var tapY = ev.clientY - r.top;
+
+      if (isCorrectTap(el)) {
+        score += 1;
+        level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+        feedback(tapX, tapY, "+1", "good");
+      } else {
+        miss(tapX, tapY);
+      }
+      render(); // HUDを更新
+    });
+    field.appendChild(el);
+
+    // 図形が時間切れで消える処理
+    var lifeMs = Math.max(800, 2500 - (level - 1) * 120); // レベルが上がるほど短くなる
+    setTimeout(function () {
+      if (done) return; // 既にタップ済みなら何もしない
+      done = true;
+      removeEl(el);
+      // 正しい図形が時間切れで消えた場合のみミスとする
+      if (myGen === gen && isCorrectTap(el)) {
+        var centerX = x + currentShapeSizeX / 2;
+        var centerY = y + currentShapeSizeY / 2;
+        miss(centerX, centerY);
+      }
+    }, lifeMs);
+
+    // 次の図形を生成するタイマー
+    var nextMs = Math.max(300, 1000 - (level - 1) * 60); // レベルが上がるほど短くなる
+    var numShapes = document.querySelectorAll("#field .shape").length;
+    var maxConcurrentShapes = Math.min(10, 2 + Math.floor(level / 3)); // レベルに応じて最大同時表示数を増やす (最大10個)
+
+    if (numShapes < maxConcurrentShapes) {
+      spawnTimer = setTimeout(function () { spawn(myGen); }, nextMs);
+    } else {
+      // 最大表示数に達している場合は、少し遅れて再試行
+      spawnTimer = setTimeout(function () { spawn(myGen); }, nextMs / 2);
+    }
+  }
+
+  // ルール変更を定期的に設定
+  function setupRuleChange(myGen) {
+    if (!running || myGen !== gen) return;
+    generateNewRule(); // 新しいルールを生成
+    var changeMs = Math.max(3000, 7000 - (level - 1) * 200); // レベルが上がるほどルール変更が速くなる
+    ruleChangeTimer = setTimeout(function () { setupRuleChange(myGen); }, changeMs);
+  }
+
+  // フィールド全体のタップ処理 (何もない場所のタップはミス)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    // タップされた要素が図形ではない場合のみミスとする
+    if (!ev.target.classList.contains("shape")) {
+      var r = field.getBoundingClientRect();
+      miss(ev.clientX - r.left, ev.clientY - r.top);
+    }
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    gen += 1; // 世代カウンターをインクリメント (古いタイマーを無効化するため)
+    var myGen = gen;
+    clearTimeout(spawnTimer);
+    clearTimeout(ruleChangeTimer);
+    field.innerHTML = ""; // フィールド上の既存の図形を全て削除
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフを初期化
+    render(); // HUDを更新
+    overlay.style.display = "none"; // オーバーレイを非表示
+    running = true; // ゲーム実行中フラグ
+    generateNewRule(); // 最初のルールを生成
+    spawnTimer = setTimeout(function () { spawn(myGen); }, 500); // 図形生成を開始
+    ruleChangeTimer = setTimeout(function () { setupRuleChange(myGen); }, Math.max(3000, 7000 - (level - 1) * 200)); // ルール変更を開始
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false;
+    gen += 1; // 世代カウンターをインクリメント (実行中のタイマーを無効化するため)
+    clearTimeout(spawnTimer);
+    clearTimeout(ruleChangeTimer);
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); } // ベストスコアを更新・保存
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  startBtn.addEventListener("click", startGame);
+  render(); // 初期表示
+  updateHint(); // 最初の遊び方ヒントを表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

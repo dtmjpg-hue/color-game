@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ミエナイドット</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  .dot { position: absolute; width: 72px; height: 72px; border-radius: 50%; background: #ffd166;
+    box-shadow: 0 0 18px #ffd166; transition: opacity 0.2s ease-out; }
+  /* 修正: ゲームのロジック上、フィールド全体でタップを検出するため、点自体への pointer-events: none は不要。非表示にする opacity: 0; のみ残す。*/
+  .dot.invisible { opacity: 0; }
+  .dot.hit { animation: pop .2s ease-out forwards; pointer-events: none; } /* hit状態ではタップ無効 */
+  @keyframes pop { to { transform: scale(1.7); opacity: 0; } }
+
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint"></div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ミエナイドット</h1>
+    <div id="ovBody">
+      <!-- 修正: 遊び方の説明を2〜3行にする (決まりごと3) -->
+      <p>画面を移動する<b>点</b>を目で追いかけ、見えなくなったら予測して<b>タップ！</b></p>
+      <p>ライフは3つ。3回ミスでゲームオーバー。点数が上がると難しくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var hintEl = document.getElementById("hint");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0;
+  var level = 1;
+  var lives = 3;
+  var running = false;
+  var gen = 0; // Generation ID for game sessions
+  var gameLoopId = null; // requestAnimationFrame ID
+  var dots = []; // Array of active dot objects
+  var lastFrameTime = 0; // For delta time calculation
+  var nextDotSpawnTime = 0; // When to spawn the next dot
+
+  // Game parameters (constants and level adjustments)
+  const DOT_SIZE = 72; // px
+  const DOT_SPEED_BASE = 100; // px/second (at level 1)
+  const DOT_SPEED_INCREASE = 20; // px/second per level
+  const DOT_VISIBLE_TIME_BASE = 1500; // ms (at level 1)
+  const DOT_VISIBLE_TIME_DECREASE = 100; // ms per level
+  const DOT_PREDICT_TIME_BASE = 1500; // ms (at level 1)
+  const DOT_PREDICT_TIME_DECREASE = 100; // ms per level
+  const DOT_APPEAR_INTERVAL_BASE = 2000; // ms (at level 1)
+  const DOT_APPEAR_INTERVAL_DECREASE = 150; // ms per level
+  const DOT_TAP_RADIUS_BASE = 60; // px (at level 1, distance from center)
+  const DOT_TAP_RADIUS_DECREASE = 3; // px per level
+
+  // ルール10 (難易度上昇 - ドットの数) のためのパラメータ
+  const DOT_MAX_COUNT_BASE = 1; // 基本のドット数
+  const DOT_MAX_COUNT_INCREASE_INTERVAL = 2; // Xレベルごとにドット数を増やす
+  const DOT_MAX_COUNT_MAX = 5; // ドット数の上限
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("invisible_dot_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("invisible_dot_best", String(v)); } catch (e) {}
+  }
+
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+    hintEl.textContent = running ? "点が消えたら、進んだ場所を予測してタップ！" : "";
+  }
+
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // Helper to get game parameters based on current level
+  function getLevelParams(currentLevel) {
+    const levelAdjust = currentLevel - 1;
+
+    const speed = Math.max(50, DOT_SPEED_BASE + DOT_SPEED_INCREASE * levelAdjust);
+    const visibleTime = Math.max(500, DOT_VISIBLE_TIME_BASE - DOT_VISIBLE_TIME_DECREASE * levelAdjust);
+    const predictTime = Math.max(500, DOT_PREDICT_TIME_BASE - DOT_PREDICT_TIME_DECREASE * levelAdjust);
+    const appearInterval = Math.max(500, DOT_APPEAR_INTERVAL_BASE - DOT_APPEAR_INTERVAL_DECREASE * levelAdjust);
+    const tapRadius = Math.max(30, DOT_TAP_RADIUS_BASE - DOT_TAP_RADIUS_DECREASE * levelAdjust);
+    
+    // ルール10 (難易度上昇 - ドットの数) のための計算
+    const maxDots = Math.min(
+      DOT_MAX_COUNT_MAX,
+      DOT_MAX_COUNT_BASE + Math.floor(levelAdjust / DOT_MAX_COUNT_INCREASE_INTERVAL)
+    );
+
+    return {
+      speed: speed, // px per second
+      visibleTime: visibleTime, // ms
+      predictTime: predictTime, // ms
+      appearInterval: appearInterval, // ms
+      tapRadius: tapRadius, // px
+      maxDots: maxDots // 追加: 同時に存在するドットの最大数
+    };
+  }
+
+  // Dot object constructor
+  function Dot(id, currentGen, params) {
+    const rect = field.getBoundingClientRect();
+    let x = Math.random() * (rect.width - DOT_SIZE);
+    let y = Math.random() * (rect.height - DOT_SIZE);
+    let vx = (Math.random() < 0.5 ? 1 : -1) * (params.speed); // px/second
+    let vy = (Math.random() < 0.5 ? 1 : -1) * (params.speed); // px/second
+
+    const el = document.createElement("div");
+    el.className = "dot";
+    el.style.width = DOT_SIZE + "px";
+    el.style.height = DOT_SIZE + "px";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.dataset.dotId = id; // Store unique ID for identification
+
+    field.appendChild(el);
+
+    this.id = id;
+    this.gen = currentGen; // Store game generation ID
+    this.el = el;
+    this.x = x;
+    this.y = y;
+    this.vx = vx;
+    this.vy = vy;
+    this.size = DOT_SIZE;
+    this.state = 'visible'; // 'visible', 'invisible', 'hit', 'missed', 'expired'
+    this.visibleStartTime = performance.now();
+    this.predictStartTime = 0; // When it becomes invisible
+
+    this.update = function (deltaTime) {
+      if (this.state === 'hit' || this.state === 'missed' || this.state === 'expired') {
+        return false; // Not active, no need to update or remove
+      }
+
+      // Update position
+      this.x += this.vx * deltaTime;
+      this.y += this.vy * deltaTime;
+
+      // Bounce off walls
+      if (this.x <= 0 || this.x >= rect.width - this.size) {
+        this.vx *= -1;
+        this.x = Math.max(0, Math.min(this.x, rect.width - this.size)); // Clamp position
+      }
+      if (this.y <= 0 || this.y >= rect.height - this.size) {
+        this.vy *= -1;
+        this.y = Math.max(0, Math.min(this.y, rect.height - this.size)); // Clamp position
+      }
+
+      // Update DOM position
+      this.el.style.left = this.x + "px";
+      this.el.style.top = this.y + "px";
+
+      // State transitions
+      const now = performance.now();
+      if (this.state === 'visible' && now - this.visibleStartTime > params.visibleTime) {
+        this.el.classList.add('invisible');
+        this.state = 'invisible';
+        this.predictStartTime = now;
+      } else if (this.state === 'invisible' && now - this.predictStartTime > params.predictTime) {
+        // Dot expired without being tapped
+        this.state = 'expired';
+        return true; // Signal for removal
+      }
+      return false; // Not expired
+    };
+
+    this.remove = function () {
+      removeEl(this.el);
+    };
+
+    this.tap = function(isSuccess) {
+      if (this.state === 'hit' || this.state === 'missed' || this.state === 'expired') return;
+      this.state = isSuccess ? 'hit' : 'missed';
+      if (isSuccess) {
+        this.el.classList.add('hit'); // Animation for hit
+      }
+      // Remove after animation (or immediately if missed and no specific animation)
+      setTimeout(() => this.remove(), 220); // Pop animation takes 0.2s
+    };
+  }
+
+  // Main game loop
+  function gameLoop(timestamp) {
+    if (!running) return;
+
+    if (!lastFrameTime) {
+      lastFrameTime = timestamp;
+    }
+    const deltaTime = (timestamp - lastFrameTime) / 1000; // in seconds
+    lastFrameTime = timestamp;
+
+    const params = getLevelParams(level); // 現在のレベルに応じたゲームパラメータを取得
+
+    // 新しいドットの生成 (ルール10対応: 同時に存在するドットの数を増やす)
+    if (timestamp >= nextDotSpawnTime && dots.length < params.maxDots) {
+      dots.push(new Dot(Date.now(), gen, params));
+      nextDotSpawnTime = timestamp + params.appearInterval;
+    }
+
+    // Update dots and remove expired ones
+    for (let i = dots.length - 1; i >= 0; i--) {
+      const dot = dots[i];
+      if (dot.gen !== gen) { // Ensure only current game's dots are processed
+        dot.remove();
+        dots.splice(i, 1);
+        continue;
+      }
+
+      const expired = dot.update(deltaTime);
+      if (expired) {
+        if (dot.state === 'expired') { // Only count as miss if it expired naturally
+          miss(dot.x + dot.size / 2, dot.y + dot.size / 2);
+        }
+        dot.remove();
+        dots.splice(i, 1);
+      }
+    }
+
+    gameLoopId = requestAnimationFrame(gameLoop);
+  }
+
+  // Field tap event
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return; // Check if current game is active
+
+    const r = field.getBoundingClientRect();
+    const tapX = ev.clientX - r.left;
+    const tapY = ev.clientY - r.top;
+
+    let hitDot = null;
+    let minDistance = Infinity;
+    const params = getLevelParams(level);
+
+    for (const dot of dots) {
+      // Only consider invisible dots of current generation that haven't been hit/missed/expired
+      if (dot.gen !== gen || dot.state !== 'invisible') {
+        continue;
+      }
+      const dotCenterX = dot.x + dot.size / 2;
+      const dotCenterY = dot.y + dot.size / 2;
+      const dist = Math.sqrt(Math.pow(tapX - dotCenterX, 2) + Math.pow(tapY - dotCenterY, 2));
+
+      if (dist < minDistance) {
+        minDistance = dist;
+        hitDot = dot;
+      }
+    }
+
+    if (hitDot && minDistance < params.tapRadius) {
+      // Success!
+      score += 1;
+      level = 1 + Math.floor(score / 5); // Level up every 5 points
+      feedback(tapX, tapY, "+1", "good");
+      hitDot.tap(true);
+      // Remove hitDot from dots array immediately
+      dots = dots.filter(d => d.id !== hitDot.id);
+      render();
+    } else {
+      // Miss!
+      miss(tapX, tapY);
+    }
+  });
+
+  function startGame() {
+    gen += 1; // Increment generation ID
+    cancelAnimationFrame(gameLoopId); // Stop any previous game loop
+    field.innerHTML = ""; // Clear all existing dot elements
+    dots = []; // Clear dots array
+    score = 0; level = 1; lives = 3;
+    lastFrameTime = 0; // Reset for new game loop
+    nextDotSpawnTime = performance.now() + 500; // First dot appears after 0.5s
+    render();
+    overlay.style.display = "none";
+    running = true;
+    gameLoopId = requestAnimationFrame(gameLoop);
+  }
+
+  function endGame() {
+    running = false;
+    gen += 1; // Increment generation ID to invalidate any remaining timers/dots
+    cancelAnimationFrame(gameLoopId); // Stop the game loop
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  startBtn.addEventListener("click", startGame);
+  render(); // Initial render for stats and hint
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

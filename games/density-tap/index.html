@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ドット見極め</title>
+<style>
+  /* お手本からの共通スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  /* 円のコンテナースタイル */
+  .circle-container {
+    position: absolute;
+    border-radius: 50%;
+    background-color: #3f51b5; /* 円の背景色 */
+    border: 2px solid transparent; /* 正解のハイライト用 */
+    cursor: pointer;
+    overflow: hidden; /* ドットがはみ出さないように */
+    transition: transform 0.1s ease-out, border-color 0.2s ease-out, box-shadow 0.2s ease-out; /* タップ時やハイライト時の視覚効果 */
+  }
+  /* 正解の円のヒントスタイル */
+  .circle-container.correct-hint {
+    border-color: #ffd166; /* 正解の円のボーダー色 */
+    box-shadow: 0 0 10px #ffd166;
+  }
+  /* タップされた円の消滅アニメーション */
+  .circle-container.tapped {
+    animation: pop-circle .2s ease-out forwards;
+    pointer-events: none; /* アニメーション中はタップを受け付けない */
+  }
+  @keyframes pop-circle {
+    to { transform: scale(1.2); opacity: 0; }
+  }
+
+  /* ドットのスタイル */
+  .dot {
+    position: absolute;
+    background-color: #f0f0f0; /* ドットの色 */
+    border-radius: 50%;
+  }
+
+  /* フィードバック (お手本からのコピー) */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイ (お手本からのコピー) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">最もドットが密集している円をタップ!</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ドット見極め</h1>
+    <div id="ovBody">
+      <p>画面に出るいくつかの円の中から、<br><b>最もドットが密集している円</b>をタップしよう!</p>
+      <p>間違った円をタップしたり、何もない所をタップすると<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、難しくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+  var hintEl = document.getElementById("hint");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var spawnTimer = null;
+  var currentCircles = []; // 現在表示中の円のデータ配列
+  var correctCircleId = null; // 正解の円のID
+
+  // ゲームパラメータ設定
+  var gameParams = {
+    minCircles: 3,
+    maxCirclesPerLevel: 3, // レベルが上がるごとに増える円の数
+    baseNumCircles: 3, // 最低の円の数
+    minCircleSize: 60,
+    maxCircleSize: 120,
+    dotSize: 8,
+    minDots: 3,
+    maxDotsPerLevel: 3, // レベルが上がるごとに増えるドットの数
+    baseNumDots: 5, // 最低のドットの数
+    maxLifeMsBase: 2500, // 円が表示されている時間 (基本)
+    lifeMsReductionPerLevel: 120, // レベルごとの表示時間短縮
+    nextSpawnMsBase: 1200, // 次のラウンドまでの間隔 (基本)
+    spawnMsReductionPerLevel: 70 // レベルごとの間隔短縮
+  };
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("dotgame_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("dotgame_best", String(v)); } catch (e) {}
+  }
+
+  // UI表示の更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+
+    if (running) {
+        hintEl.textContent = "最もドットが密集している円をタップ!";
+    }
+  }
+
+  // 要素を削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // スコアやミスのフィードバック表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // field要素の相対座標に変換して表示
+    var r = field.getBoundingClientRect();
+    f.style.left = (x - r.left) + "px";
+    f.style.top = (y - r.top) + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス発生時の処理
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) {
+        endGame();
+    } else {
+        // ミスしても次のラウンドへ進む
+        setTimeout(function() {
+            if (running) spawn(gen);
+        }, 300); // 少し待ってから次のラウンドを開始
+    }
+  }
+
+  // 指定範囲内のランダムな整数を取得
+  function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  // 円の中にドットを配置
+  function placeDots(circleEl, numDots, circleSize, dotSize) {
+    for (var i = 0; i < numDots; i++) {
+      var dot = document.createElement("div");
+      dot.className = "dot";
+      dot.style.width = dotSize + "px";
+      dot.style.height = dotSize + "px";
+
+      // ドットが円からはみ出さないように配置範囲を計算
+      var maxDotX = Math.max(0, circleSize - dotSize);
+      var maxDotY = Math.max(0, circleSize - dotSize);
+      dot.style.left = getRandomInt(0, maxDotX) + "px";
+      dot.style.top = getRandomInt(0, maxDotY) + "px";
+      circleEl.appendChild(dot);
+    }
+  }
+
+  // 新しいラウンドの円を生成
+  function spawn(myGen) {
+    if (!running || myGen !== gen) return; // 現在のゲーム世代と一致しない場合は処理しない
+    clearTimeout(spawnTimer); // 前のラウンドのタイマーをクリア
+
+    field.innerHTML = ""; // フィールド上の全ての円をクリア
+    currentCircles = [];
+    correctCircleId = null;
+
+    var rect = field.getBoundingClientRect();
+    var fieldWidth = rect.width;
+    var fieldHeight = rect.height;
+
+    // レベルに応じた円の数とドット数の調整
+    var numCircles = Math.min(gameParams.baseNumCircles + Math.floor(level / gameParams.maxCirclesPerLevel), 8); // 最大8個程度
+    var maxDotsForLevel = Math.min(gameParams.baseNumDots + Math.floor(level * gameParams.maxDotsPerLevel), 30); // 最大30個程度
+
+    for (var i = 0; i < numCircles; i++) {
+      var circleSize = getRandomInt(gameParams.minCircleSize, gameParams.maxCircleSize);
+      var dotsCount = getRandomInt(gameParams.minDots, maxDotsForLevel);
+      var id = "circle_" + i + "_" + myGen;
+
+      // 円が画面からはみ出さないように位置を計算
+      var x = getRandomInt(0, Math.max(0, fieldWidth - circleSize));
+      var y = getRandomInt(0, Math.max(0, fieldHeight - circleSize));
+
+      // 密集度 = ドット数 / 面積
+      var density = dotsCount / (circleSize * circleSize);
+
+      currentCircles.push({
+        id: id,
+        x: x,
+        y: y,
+        size: circleSize,
+        dotsCount: dotsCount,
+        density: density,
+        element: null // DOM要素は後で追加
+      });
+    }
+
+    // 最もドットが密集している円を特定
+    // ドット数が多い方を優先し、同数の場合は密集度が高い方を正解とする
+    currentCircles.sort(function(a, b) {
+        if (a.dotsCount !== b.dotsCount) {
+            return b.dotsCount - a.dotsCount; // ドット数が多い順
+        }
+        return b.density - a.density; // 密集度が高い順
+    });
+    correctCircleId = currentCircles[0].id; // ソート後の最初の円が正解
+
+    // DOM要素を生成し、フィールドに追加
+    currentCircles.forEach(function(circleData) {
+      var circleEl = document.createElement("div");
+      circleEl.className = "circle-container";
+      circleEl.id = circleData.id;
+      circleEl.style.width = circleData.size + "px";
+      circleEl.style.height = circleData.size + "px";
+      circleEl.style.left = circleData.x + "px";
+      circleEl.style.top = circleData.y + "px";
+
+      // 正解の円にはヒントクラスを付与
+      if (circleData.id === correctCircleId) {
+        circleEl.classList.add("correct-hint");
+      }
+
+      placeDots(circleEl, circleData.dotsCount, circleData.size, gameParams.dotSize);
+
+      circleEl.addEventListener("pointerdown", function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation(); // イベントが親要素に伝播するのを防ぐ
+        if (!running || myGen !== gen || circleEl.classList.contains("tapped")) return;
+
+        circleEl.classList.add("tapped"); // タップ済みマークのアニメーション
+
+        var tapX = ev.clientX;
+        var tapY = ev.clientY;
+
+        if (circleData.id === correctCircleId) {
+          score += 1;
+          level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+          feedback(tapX, tapY, "+1", "good");
+          render();
+          // 正解をタップしたら、次のラウンドへ
+          setTimeout(function () { spawn(myGen); }, Math.max(gameParams.nextSpawnMsBase - (level - 1) * gameParams.spawnMsReductionPerLevel, 400));
+        } else {
+          // 間違った円をタップした場合
+          miss(tapX, tapY);
+          // 間違いでも次のラウンドへ
+          setTimeout(function () {
+              if (running) spawn(myGen);
+          }, Math.max(gameParams.nextSpawnMsBase - (level - 1) * gameParams.spawnMsReductionPerLevel, 400));
+        }
+      });
+      field.appendChild(circleEl);
+      circleData.element = circleEl; // DOM要素をデータに紐付け
+    });
+
+    // 正解の円がタップされずに時間切れになった場合のタイマー
+    var lifeMs = Math.max(gameParams.maxLifeMsBase, gameParams.maxLifeMsBase - (level - 1) * gameParams.lifeMsReductionPerLevel);
+    spawnTimer = setTimeout(function () {
+      if (running && myGen === gen) {
+        // 正解がタップされずに時間切れ
+        var correctEl = document.getElementById(correctCircleId);
+        if (correctEl) {
+            var rect = correctEl.getBoundingClientRect();
+            miss(rect.left + rect.width / 2, rect.top + rect.height / 2); // 正解の円の位置でミス表示
+        } else {
+            // 正解要素がなかった場合（稀なケース、既にタップ済みなど）
+            var r = field.getBoundingClientRect();
+            miss(r.left + r.width / 2, r.top + r.height / 2); // フィールド中央でミス表示
+        }
+      }
+    }, lifeMs);
+  }
+
+  // フィールド全体へのタップリスナー (何もない場所をタップした場合)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    // ev.target が field 自体であれば、何もない場所のタップと判断
+    if (ev.target === field) {
+        miss(ev.clientX, ev.clientY);
+        // ミスしたら次のラウンドへ
+        setTimeout(function () {
+            if (running) spawn(gen);
+        }, Math.max(gameParams.nextSpawnMsBase - (level - 1) * gameParams.spawnMsReductionPerLevel, 400));
+    }
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    gen += 1; // 新しいゲーム世代を開始
+    var myGen = gen;
+    clearTimeout(spawnTimer); // 既存のタイマーを全てクリア
+    field.innerHTML = ""; // 既存の円を全て削除
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフを初期化
+    currentCircles = [];
+    correctCircleId = null;
+    render(); // UIを初期表示に更新
+    overlay.style.display = "none"; // オーバーレイを非表示に
+    running = true; // ゲームを走行状態に
+    spawnTimer = setTimeout(function () { spawn(myGen); }, 500); // 最初のラウンド開始
+  }
+
+  // ゲーム終了処理
+  function endGame() {
+    running = false;
+    gen += 1; // 新しい世代に切り替えることで、進行中のタイマーやイベントを無効化
+    clearTimeout(spawnTimer);
+    field.innerHTML = ""; // 残っている円を全て消す
+    currentCircles = []; // 円データもクリア
+
+    var best = loadBest(); // ベストスコアをロード
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); } // 新記録なら保存
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  startBtn.addEventListener("click", startGame); // スタートボタンにイベントリスナーを設定
+  render(); // 最初のUI表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

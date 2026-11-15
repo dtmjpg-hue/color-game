@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ぴったりシェイプ</title>
+<style>
+  /* 全体のリセットとスマホ向け設定 */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+
+  /* アプリのコンテナ (画面全体を占有) */
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* HUD (ヘッドアップディスプレイ) - スコア、レベル、ライフ、ヒント */
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { /* ヒント表示エリア */
+    margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166;
+    display: flex; align-items: center; justify-content: center; /* アイコンとテキストを中央寄せ */
+  }
+  .target-icon { /* 目標となる「正円」のアイコン */
+    display: inline-block;
+    width: 1em;
+    height: 1em;
+    background-color: #ffd166;
+    border-radius: 50%;
+    vertical-align: middle;
+    margin-left: 0.3em;
+    margin-right: 0.3em;
+  }
+
+  /* ゲームプレイエリア */
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  /* 変形する図形 */
+  .deforming-shape {
+    --sx: 1; /* scaleX の CSS 変数 */
+    --sy: 1; /* scaleY の CSS 変数 */
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    background: #ffd166;
+    border-radius: 50%; /* 正方形の時に正円になる */
+    left: 50%;
+    top: 50%;
+    /* 中央に配置し、CSS変数で変形させる */
+    transform: translate(-50%, -50%) scaleX(var(--sx)) scaleY(var(--sy));
+    box-shadow: 0 0 18px #ffd166;
+    pointer-events: auto; /* 初期状態はタップ可能 */
+  }
+
+  /* タップ結果のフィードバック */
+  .fb {
+    position: absolute; font-size: 22px; font-weight: bold; pointer-events: none;
+    animation: rise .6s ease-out forwards; /* 上昇しながら消えるアニメーション */
+  }
+  .good { color: #7dffa0; } /* 成功時の色 */
+  .bad { color: #ff7d7d; }  /* 失敗時の色 */
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイ (ゲーム開始前/ゲームオーバー時) */
+  #overlay {
+    position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex;
+    flex-direction: column; align-items: center; justify-content: center;
+    padding: 24px; text-align: center; z-index: 10;
+  }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { /* ボタンのスタイル */
+    margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px;
+    font-size: 22px; font-weight: bold; color: #3a2a00; background: #ffd166;
+    border: none; border-radius: 14px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">目標: <div class="target-icon"></div> 正円になったらタップ!</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ぴったりシェイプ</h1>
+    <div id="ovBody">
+      <p>画面中央の図形が<b>正円</b>になったらタップしよう!</p>
+      <p>タイミングがずれたり、何もない所をタップすると<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、変形がはやくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  // DOM要素の取得
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲーム状態変数
+  var score = 0, level = 1, lives = 3, running = false, currentGen = 0;
+  var deformingShapeEl = null; // 変形する図形要素
+  var deformingShapeStartTime = 0; // アニメーション開始時刻
+  var deformingShapeAnimationFrameId = null; // requestAnimationFrameのID
+  var tapCooldownTimer = null; // タップクールダウン用のタイマーID
+
+  // ゲーム設定値 (レベルによって変化)
+  var baseDeformDuration = 2500; // 図形が1周期 (最大変形 → 正円 → 最大変形 → 正円) するまでの基本時間 (ms)
+  var minDeformDuration = 800;   // 変形周期の最小時間
+  var baseDeformAmount = 0.5;    // 基本の変形量 (scale 1.0からの変動幅)
+  var maxDeformAmountIncrease = 0.4; // レベルアップによる変形量の最大増加分
+  var baseHitThreshold = 0.08;   // 正円と判定されるスケール誤差の基本閾値
+  var minHitThreshold = 0.02;    // 正円と判定されるスケール誤差の最小閾値
+  var tapCooldownMs = 300;       // タップ後、次のタップを処理するまでのクールダウン時間 (ms)
+
+  // ベストスコアの読み込みと保存
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("perfect_shape_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("perfect_shape_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの表示更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // 要素の削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // タップ結果のフィードバック表示
+  function feedback(text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    var rect = field.getBoundingClientRect();
+    // フィードバックは常に画面中央に表示
+    f.style.left = (rect.width / 2) + "px";
+    f.style.top = (rect.height / 2) + "px";
+    f.style.transform = 'translate(-50%, -50%)'; // 中心を合わせる
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650); // 一定時間後に削除
+  }
+
+  // ミス時の処理
+  function miss() {
+    if (!running) return;
+    lives -= 1;
+    feedback("ミス!", "bad");
+    render();
+    if (lives <= 0) endGame(); // ライフがなくなったらゲームオーバー
+  }
+
+  // 図形の変形アニメーションを更新
+  function updateShape(myGen) {
+    // ゲームが終了している、または世代が変わった場合はアニメーションを停止
+    if (myGen !== currentGen || !running || !deformingShapeEl) {
+      if (deformingShapeAnimationFrameId) {
+        cancelAnimationFrame(deformingShapeAnimationFrameId);
+        deformingShapeAnimationFrameId = null;
+      }
+      return;
+    }
+
+    var now = performance.now();
+    // レベルに応じた変形速度と振幅を計算
+    var deformDuration = Math.max(minDeformDuration, baseDeformDuration - (level - 1) * 150);
+    var deformAmount = baseDeformAmount + Math.min(maxDeformAmountIncrease, (level - 1) * 0.02);
+
+    // `phase` は `0` から `2*PI` を繰り返し、`Math.cos(phase)` は `-1` から `1` を繰り返す
+    // `cos(phase)` が `0` のときにターゲット形状 (正円) になる
+    var phase = ((now - deformingShapeStartTime) / deformDuration) * 2 * Math.PI;
+    var cosPhase = Math.cos(phase);
+
+    var currentScaleX = 1 + deformAmount * cosPhase;
+    var currentScaleY = 1 - deformAmount * cosPhase;
+
+    // CSS変数を通じて図形をスケール変形
+    deformingShapeEl.style.setProperty('--sx', currentScaleX);
+    deformingShapeEl.style.setProperty('--sy', currentScaleY);
+
+    // 次のフレームでアニメーションを継続
+    deformingShapeAnimationFrameId = requestAnimationFrame(function () { updateShape(myGen); });
+  }
+
+  // 図形タップ時の処理
+  function handleShapeTap(ev) {
+    ev.preventDefault();
+    ev.stopPropagation(); // field の pointerdown イベントへの伝播を停止
+    if (!running || ev.target !== deformingShapeEl) return;
+
+    // タップクールダウン中は処理しない
+    if (deformingShapeEl.style.pointerEvents === 'none') return;
+
+    // タップを一時的に無効化し、クールダウンタイマーを設定
+    deformingShapeEl.style.pointerEvents = 'none';
+    clearTimeout(tapCooldownTimer);
+    tapCooldownTimer = setTimeout(() => {
+        if (running && deformingShapeEl) deformingShapeEl.style.pointerEvents = 'auto';
+    }, tapCooldownMs);
+
+    var now = performance.now();
+    // 現在のレベルに応じた変形パラメータを取得
+    var deformDuration = Math.max(minDeformDuration, baseDeformDuration - (level - 1) * 150);
+    var deformAmount = baseDeformAmount + Math.min(maxDeformAmountIncrease, (level - 1) * 0.02);
+    var hitThreshold = Math.max(minHitThreshold, baseHitThreshold - (level - 1) * 0.005); // レベルが上がると判定を厳しくする
+
+    var phase = ((now - deformingShapeStartTime) / deformDuration) * 2 * Math.PI;
+    var cosPhase = Math.cos(phase);
+    var currentScaleX = 1 + deformAmount * cosPhase;
+
+    // currentScaleX が 1 (正円の状態) に十分に近ければ成功
+    if (Math.abs(currentScaleX - 1) < hitThreshold) {
+      score += 1;
+      // レベルアップの条件はスコア5点ごとに1レベル
+      level = 1 + Math.floor(score / 5);
+      feedback("+1", "good");
+      render();
+    } else {
+      miss();
+    }
+  }
+
+  // ゲームフィールド背景タップ時の処理 (図形以外の場所をタップした場合)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    // タップされた要素が変形する図形自身でない場合、ミスとする
+    if (deformingShapeEl && ev.target === deformingShapeEl) {
+        // これは handleShapeTap で処理されるため、ここでは何もしない
+        return; 
+    }
+    miss();
+  });
+
+  // ゲーム開始処理
+  function startGame() {
+    currentGen += 1; // ゲーム世代をインクリメントして古いアニメーションを停止させる
+    clearTimeout(tapCooldownTimer); // クールダウンタイマーをクリア
+    if (deformingShapeAnimationFrameId) { // 既存のアニメーションフレームをキャンセル
+      cancelAnimationFrame(deformingShapeAnimationFrameId);
+      deformingShapeAnimationFrameId = null;
+    }
+    field.innerHTML = ""; // フィールド内の要素をすべてクリア (古い図形も削除)
+
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフをリセット
+    render(); // HUDを更新
+    overlay.style.display = "none"; // オーバーレイを非表示
+    running = true; // ゲームを走行中に設定
+
+    // 変形する図形要素を生成してフィールドに追加
+    deformingShapeEl = document.createElement("div");
+    deformingShapeEl.className = "deforming-shape";
+    deformingShapeEl.addEventListener("pointerdown", handleShapeTap); // タップリスナーを設定
+    field.appendChild(deformingShapeEl);
+    
+    // 変形アニメーションの開始時間をリセット
+    deformingShapeStartTime = performance.now();
+    // 初期状態の見た目を設定 (cos(0) = 1 なので、最大変形状態から開始)
+    deformingShapeEl.style.setProperty('--sx', 1 + baseDeformAmount * Math.cos(0));
+    deformingShapeEl.style.setProperty('--sy', 1 - baseDeformAmount * Math.cos(0));
+    deformingShapeEl.style.pointerEvents = 'auto'; // タップ可能に設定
+
+    updateShape(currentGen); // アニメーションループを開始
+  }
+
+  // ゲームオーバー処理
+  function endGame() {
+    running = false; // ゲームを停止
+    currentGen += 1; // 現在のゲーム世代を無効化
+    clearTimeout(tapCooldownTimer); // クールダウンタイマーをクリア
+    if (deformingShapeAnimationFrameId) { // アニメーションループをキャンセル
+      cancelAnimationFrame(deformingShapeAnimationFrameId);
+      deformingShapeAnimationFrameId = null;
+    }
+    if (deformingShapeEl) { // 図形要素を画面から削除
+        removeEl(deformingShapeEl);
+        deformingShapeEl = null;
+    }
+
+    // ゲームオーバー画面の表示
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  // スタートボタンクリックでゲーム開始
+  startBtn.addEventListener("click", startGame);
+  render(); // 初期表示 (スコア、ライフ、レベルなど)
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ピタッとライン</title>
+<style>
+  /* お手本からの共通スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  #field { position: relative; flex: 1; overflow: hidden; }
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+
+  /* 新しいゲームのスタイル */
+  #field canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    display: block; /* 余白対策 */
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint"></div> <!-- ゲームプレイ中にヒントを表示 -->
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ピタッとライン</h1>
+    <div id="ovBody">
+      <p>画面の左右から伸びてくる<b>2本の線</b>。</p>
+      <p>中央でぴったり合流する瞬間に画面を<b>タップ</b>しよう！</p>
+      <p>タイミングがズレると<b>ミス</b>。ライフは3つ。</p>
+      <p>レベルが上がると線が伸びるのが速くなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var hintEl = document.getElementById("hint");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false;
+  var gen = 0; // ゲーム世代番号。古いアニメーションが残るのを防ぐ
+
+  // Canvas関連
+  var canvas, ctx;
+  var gameWidth, gameHeight;
+  var lineLength = 0; // 0から最大 (field.width / 2) まで伸びる
+  var lineSpeedPerMs = 0; // 1ミリ秒あたりの長さの増加量 (px/ms)
+  var animationId = null; // requestAnimationFrame のID
+  var lastFrameTime = 0; // 前回フレームの時刻 (performance.now())
+
+  // ゲームの状態管理
+  var currentLinePhase = 'waiting'; // 'waiting', 'growing', 'meeting_window', 'paused_after_tap'
+  var perfectMeetTime = 0; // 線が完全に合流するはずの時刻 (performance.now())
+  var tapToleranceMs = 100; // タップ許容誤差（ミリ秒、初期値）
+
+  // ローカルストレージからのベストスコア読み書き
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("pitat_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("pitat_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの表示更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+    hintEl.textContent = "線が中央で合流する瞬間にタップ！";
+  }
+
+  // 要素の削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // タップ結果のフィードバック表示
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // 表示位置はフィールド中央を基準にタップ位置へオフセット (タップ位置が画面外の場合に備え)
+    var centerX = gameWidth / 2;
+    var centerY = gameHeight / 2;
+    f.style.left = (centerX + (x - centerX) / 2) + "px"; // 少し中央寄り
+    f.style.top = (centerY + (y - centerY) / 2) + "px"; // 少し中央寄り
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // Canvasのセットアップ
+  function setupCanvas() {
+    // 既存のCanvasがあれば削除
+    if (canvas && canvas.parentNode) {
+      canvas.parentNode.removeChild(canvas);
+    }
+    canvas = document.createElement("canvas");
+    field.appendChild(canvas);
+    ctx = canvas.getContext("2d");
+    resizeCanvas(); // 作成時に一度リサイズ
+  }
+
+  // Canvasのリサイズ処理
+  function resizeCanvas() {
+    // canvasがまだ存在しない場合やゲームが始まっていない場合は何もしない
+    if (!canvas || !running) return;
+
+    gameWidth = field.clientWidth;
+    gameHeight = field.clientHeight;
+    canvas.width = gameWidth;
+    canvas.height = gameHeight;
+    drawLines(); // サイズ変更時に再描画
+  }
+
+  // 線の描画
+  function drawLines() {
+    ctx.clearRect(0, 0, gameWidth, gameHeight); // 全体をクリア
+
+    if (!running) return;
+
+    // 左から伸びる線
+    ctx.beginPath();
+    ctx.moveTo(0, gameHeight / 2);
+    ctx.lineTo(lineLength, gameHeight / 2);
+    ctx.strokeStyle = "#ffd166"; // 黄色
+    ctx.lineWidth = 14; // 線の太さ
+    ctx.lineCap = "round"; // 線の端を丸く
+    ctx.stroke();
+
+    // 右から伸びる線
+    ctx.beginPath();
+    ctx.moveTo(gameWidth, gameHeight / 2);
+    ctx.lineTo(gameWidth - lineLength, gameHeight / 2);
+    ctx.strokeStyle = "#ffd166";
+    ctx.lineWidth = 14;
+    ctx.lineCap = "round";
+    ctx.stroke();
+  }
+
+  // アニメーションループ
+  function animate(currentTime) {
+    // 世代番号が一致しない、またはゲームが実行中でない場合は停止
+    if (!running || gen !== currentGen) {
+      cancelAnimationFrame(animationId);
+      return;
+    }
+
+    if (!lastFrameTime) lastFrameTime = currentTime;
+    var deltaTime = currentTime - lastFrameTime; // 前回からの経過時間（ms）
+    lastFrameTime = currentTime;
+
+    var maxLineLength = gameWidth / 2; // 線が到達する最大の長さ (画面幅の半分)
+
+    // 線が伸びる速度の調整（レベル依存）
+    var baseDurationMs = 2000; // 初期レベルで線が画面中央まで到達するまでの時間 (ms)
+    var levelAdjustRate = 120; // レベル1上がるごとに短縮される時間 (ms)
+    var levelAdjustedDuration = Math.max(700, baseDurationMs - (level - 1) * levelAdjustRate);
+    lineSpeedPerMs = maxLineLength / levelAdjustedDuration; // 1msあたりの長さの増加量 (px/ms)
+
+    // タップ許容誤差もレベルに応じて変化
+    var baseTapToleranceMs = 100;
+    var levelAdjustTapTolerance = 8; // レベル1上がるごとに狭まる誤差 (ms)
+    tapToleranceMs = Math.max(20, baseTapToleranceMs - (level - 1) * levelAdjustTapTolerance);
+
+
+    if (currentLinePhase === 'growing') {
+        lineLength += lineSpeedPerMs * deltaTime;
+        if (lineLength >= maxLineLength) {
+            lineLength = maxLineLength;
+            currentLinePhase = 'meeting_window';
+            perfectMeetTime = currentTime; // 合流した瞬間を記録
+
+            // 合流ウィンドウを過ぎたら自動的にミスとするためのタイマー
+            // 許容誤差の2倍の時間（例: 100msの誤差なら200ms後に判定）
+            setTimeout(function(currentGenAtSetTimeout) {
+                if (currentLinePhase === 'meeting_window' && running && gen === currentGenAtSetTimeout) {
+                    // タップが間に合わなかった場合
+                    miss(gameWidth / 2, gameHeight / 2); // 中央でミスと表示
+                    currentLinePhase = 'paused_after_tap'; // 次の線まで待機
+                    cancelAnimationFrame(animationId);
+                    setTimeout(startNewLine, 300); // 少し待ってから次の線を開始
+                }
+            }, tapToleranceMs * 2, gen); // 現在の世代番号を渡す
+        }
+    } else if (currentLinePhase === 'paused_after_tap') {
+        // タップ後、次の線が始まるまで待機中のため、アニメーションは停止
+        // ここでは何もしない (requestAnimationFrameが呼ばれない)
+    }
+
+    drawLines();
+    animationId = requestAnimationFrame(animate);
+  }
+
+  // 新しい線のアニメーションを開始
+  function startNewLine() {
+    if (!running || gen !== currentGen) {
+      // 世代番号が違う場合は何もしない (古いアニメーションが残るのを防ぐ)
+      return;
+    }
+
+    lineLength = 0; // 長さをリセット
+    currentLinePhase = 'growing'; // 成長フェーズ開始
+    lastFrameTime = 0; // フレーム時間をリセット
+    cancelAnimationFrame(animationId); // 既存のアニメーションがあればキャンセル
+    animationId = requestAnimationFrame(animate); // 新しいアニメーションを開始
+  }
+
+  // フィールドのタップイベント
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    ev.preventDefault(); // デフォルトの動作（スクロールなど）を抑制
+    ev.stopPropagation(); // イベントのバブリングを停止
+
+    // Canvas座標に変換
+    var r = field.getBoundingClientRect();
+    var tapX = ev.clientX - r.left;
+    var tapY = ev.clientY - r.top;
+    
+    // フィードバック表示位置はタップ位置
+    var feedbackX = tapX;
+    var feedbackY = tapY;
+
+    if (currentLinePhase === 'meeting_window') {
+        var tapTime = performance.now(); // タップされた正確な時刻
+        var error = Math.abs(tapTime - perfectMeetTime); // 合流時刻からの誤差
+
+        if (error <= tapToleranceMs) {
+            // 成功
+            score += 1;
+            level = 1 + Math.floor(score / 5);
+            feedback(feedbackX, feedbackY, "+1", "good");
+            render();
+            currentLinePhase = 'paused_after_tap'; // 次の線まで一時停止
+            cancelAnimationFrame(animationId); // アニメーションを一時停止
+            setTimeout(startNewLine, 300); // 少し待ってから次の線を開始
+        } else {
+            // ミス (タイミングがズレた)
+            miss(feedbackX, feedbackY);
+            currentLinePhase = 'paused_after_tap'; // 次の線まで一時停止
+            cancelAnimationFrame(animationId); // アニメーションを一時停止
+            setTimeout(startNewLine, 300); // 少し待ってから次の線を開始
+        }
+    } else {
+        // 線が合流するタイミングではないときにタップした場合はミス
+        // 連打やでたらめなタップ対策
+        miss(feedbackX, feedbackY);
+    }
+  });
+
+  // ゲーム開始処理
+  var currentGen = 0; // startGame呼び出しごとに増える世代番号
+  function startGame() {
+    gen += 1; // グローバル世代番号を更新
+    currentGen = gen; // 現在のゲームの世代番号としてコピー
+    cancelAnimationFrame(animationId); // 前回のゲームのアニメーションを確実に停止
+
+    setupCanvas(); // Canvasの再セットアップ
+    
+    score = 0; level = 1; lives = 3;
+    render();
+    overlay.style.display = "none";
+    running = true;
+    startNewLine(); // 最初の線を開始
+  }
+
+  // ゲームオーバー処理
+  function endGame() {
+    running = false;
+    gen += 1; // 世代番号を更新して、実行中のアニメーションループを停止させる
+    cancelAnimationFrame(animationId); // 確実に停止
+    if (ctx) { // ctxが存在する場合のみクリア
+      ctx.clearRect(0, 0, gameWidth, gameHeight); // Canvasの内容をクリア
+    }
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  // 初期化とイベントリスナー登録
+  startBtn.addEventListener("click", startGame);
+  render();
+
+  // アプリケーション起動時に一度だけリサイズイベントを登録
+  window.addEventListener("resize", function() {
+    if (running) { // ゲーム中のみリサイズ時にCanvasを調整
+        resizeCanvas();
+    }
+  });
+
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

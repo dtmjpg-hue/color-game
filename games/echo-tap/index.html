@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ぴったりサークル</title>
+<style>
+  /* 決まりごと2: 縦画面スマホ対応、スクロールなし */
+  /* 決まりごと1: HTML, CSS, JavaScript を1ファイルに */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  /* 決まりごと7: いま何をすればいいかを常に表示 */
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  #field { position: relative; flex: 1; overflow: hidden; }
+
+  /* 拡大する円のスタイル */
+  .growing-circle {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    /* 目標サイズはJSで管理し、CSS変数として設定。transform: scale()でサイズを制御 */
+    width: var(--target-size, 200px); 
+    height: var(--target-size, 200px);
+    border-radius: 50%;
+    background: #ffd166;
+    opacity: 0.8;
+    transform: translate(-50%, -50%) scale(0.1); /* 初期スケール */
+    transform-origin: center center;
+    box-shadow: 0 0 10px rgba(255, 209, 102, 0.7);
+    transition: opacity 0.1s ease-out; /* タップ時のフェードアウトアニメーション用 */
+    cursor: pointer;
+  }
+  /* タップ後のアニメーション */
+  .growing-circle.tapped {
+    animation: circle-pop .2s ease-out forwards;
+    pointer-events: none; /* タップ後、それ以上イベントを受け付けない */
+  }
+  /* 目標サイズを示すガイドリング */
+  .target-ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: var(--target-size, 200px);
+    height: var(--target-size, 200px);
+    border-radius: 50%;
+    border: 4px dashed #7dffa0; /* 成功時の色に合わせた縁取り */
+    box-sizing: border-box;
+    transform: translate(-50%, -50%); /* 中央配置 */
+    pointer-events: none; /* クリックイベントをブロックしない */
+    opacity: 0.5;
+  }
+  /* お手本から流用したフィードバックアニメーション */
+  /* 決まりごと8: タップの結果が画面でわかる */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; z-index: 5;}
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  .fb.good-size { font-size: 28px; } /* 成功時のフィードバックを少し大きく */
+  .fb.bad-size { font-size: 28px; } /* 失敗時のフィードバックを少し大きく */
+
+  @keyframes circle-pop { /* 円がタップされた時のアニメーション */
+    to { transform: translate(-50%, -50%) scale(1.5); opacity: 0; }
+  }
+  @keyframes rise { /* フィードバックテキストが浮き上がるアニメーション */
+    to { transform: translateY(-36px); opacity: 0; }
+  }
+
+  /* オーバーレイ (スタート画面、ゲームオーバー画面) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  /* 決まりごと3: 遊び方表示とスタートボタン */
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  /* 決まりごと13: ゲームオーバーで最終スコアを大きく表示 */
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <!-- 決まりごと9: スコア、レベル、ライフを常に表示 -->
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <!-- 決まりごと6: 残りのライフを画面に表示 -->
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">円が目標サイズになったらタップ！</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ぴったりサークル</h1>
+    <div id="ovBody">
+      <p>画面に現れる円が、目標のサイズに<b>ぴったり</b>になった瞬間にタップして成長を止めよう！</p>
+      <p>早すぎても遅すぎても<b>ミス</b>だよ。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルアップ！円の成長がはやくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ゲームの状態変数
+  var score = 0, level = 1, lives = 3, running = false, gameGen = 0; // gameGenはお手本から流用し、ゲーム全体のリセットに使う
+  
+  // 拡大する円に関する変数
+  var currentCircleEl = null; // 現在表示されている円のDOM要素
+  var targetRingEl = null;    // 目標サイズを示すリングのDOM要素
+  var animationFrameId = null; // requestAnimationFrameのID
+  var circleGen = 0;          // 各円の世代ID。古いアニメーションが新しい円に影響しないようにする
+  var lastFrameTime = 0;      // requestAnimationFrameでの経過時間計算用
+  var currentCircleSize = 0;  // 現在の円のサイズ (ピクセル)
+  var autoMissTimeoutId = null; // 自動ミス処理のタイマーID
+
+  // ゲームパラメータ (難易度調整用)
+  var TARGET_SIZE = 200; // 目標とする円のサイズ (px)
+  var INITIAL_SIZE = 20; // 円の初期サイズ (px)
+
+  // 決まりごと10: 成功を重ねるほど難しくなる (速度が上がる、許容範囲が狭くなる)
+  var BASE_GROWTH_SPEED = 0.15; // 基本の拡大速度 (px/ms)
+  var GROWTH_SPEED_PER_LEVEL = 0.02; // レベルごとの拡大速度増加量
+  var BASE_TOLERANCE = 15; // 基本のタップ許容範囲 (px)
+  var TOLERANCE_DECREASE_PER_LEVEL = 2; // レベルごとの許容範囲減少量 (最小3px)
+  var ANIMATION_POP_DURATION = 220; // タップ時のポップアニメーションのミリ秒 (CSSの@keyframes circle-popと合わせる)
+
+  // CSSカスタムプロパティに目標サイズを設定 (ガイドリングと円の最大サイズ)
+  field.style.setProperty('--target-size', TARGET_SIZE + 'px');
+
+  // お手本から流用: ベストスコアの保存・読み込み (決まりごと13)
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("circle_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("circle_best", String(v)); } catch (e) {}
+  }
+
+  // お手本から流用: スコア、レベル、ライフの表示更新 (決まりごと6, 9)
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // お手本から流用: 要素の削除
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // お手本から流用: フィードバック表示 (決まりごと8)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // フィードバックを円の中心に表示するため、固定位置に調整
+    f.style.left = (field.clientWidth / 2) + "px";
+    f.style.top = (field.clientHeight / 2) + "px";
+    f.style.transform = "translate(-50%, -50%)"; // 中央寄せ
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // 円の拡大アニメーションを更新
+  function updateCircle(timestamp) {
+    // 別のゲームが始まっている、またはゲームが停止している場合は終了
+    if (!running || currentCircleEl === null || currentCircleEl.dataset.circleGen !== String(circleGen)) {
+      cancelAnimationFrame(animationFrameId);
+      return;
+    }
+
+    if (!lastFrameTime) lastFrameTime = timestamp;
+    var deltaTime = timestamp - lastFrameTime;
+    lastFrameTime = timestamp;
+
+    var actualGrowthSpeed = BASE_GROWTH_SPEED + (level - 1) * GROWTH_SPEED_PER_LEVEL;
+    var growthAmount = deltaTime * actualGrowthSpeed;
+    currentCircleSize += growthAmount;
+
+    // 現在のサイズに基づいてスケールを更新
+    var scale = currentCircleSize / TARGET_SIZE;
+    currentCircleEl.style.transform = 'translate(-50%, -50%) scale(' + scale + ')';
+
+    // 許容範囲
+    var tolerance = Math.max(3, BASE_TOLERANCE - (level - 1) * TOLERANCE_DECREASE_PER_LEVEL);
+
+    // 円が目標サイズを超えすぎてしまった場合 (自動ミス)
+    if (currentCircleSize > TARGET_SIZE + tolerance) {
+      handleCircleCompletion(false); // 失敗として処理
+      return;
+    }
+
+    animationFrameId = requestAnimationFrame(updateCircle);
+  }
+
+  // 円の生成と拡大開始
+  function startNewCircle() {
+    clearTimeout(autoMissTimeoutId); // 既存の自動ミス処理タイマーをクリア
+    cancelAnimationFrame(animationFrameId); // 既存のアニメーションを停止
+
+    // 既存の円とリングを削除
+    removeEl(currentCircleEl);
+    removeEl(targetRingEl);
+    currentCircleEl = null; // 確実にnullにする
+
+    if (!running) return; // ゲームが終了している場合は新しい円を生成しない
+
+    circleGen++; // 新しい円の世代ID
+    
+    // ガイドリングの作成
+    targetRingEl = document.createElement("div");
+    targetRingEl.className = "target-ring";
+    targetRingEl.dataset.circleGen = circleGen; // 世代IDを設定
+    field.appendChild(targetRingEl);
+
+    // 拡大する円の作成
+    currentCircleEl = document.createElement("div");
+    currentCircleEl.className = "growing-circle";
+    currentCircleEl.dataset.circleGen = circleGen; // 世代IDを設定
+    
+    // 円のタップイベントリスナー
+    currentCircleEl.addEventListener("pointerdown", handleCircleTap);
+    field.appendChild(currentCircleEl);
+
+    currentCircleSize = INITIAL_SIZE; // 初期サイズにリセット
+    lastFrameTime = performance.now(); // アニメーション開始時間をリセット
+
+    // 円の拡大開始
+    animationFrameId = requestAnimationFrame(updateCircle);
+
+    // 自動ミス処理のタイマー設定 (一定時間内にタップされなかった場合)
+    var actualGrowthSpeed = BASE_GROWTH_SPEED + (level - 1) * GROWTH_SPEED_PER_LEVEL;
+    var timeToReachTarget = (TARGET_SIZE - INITIAL_SIZE) / actualGrowthSpeed;
+    // 目標サイズに達してから少し猶予を持たせる
+    var autoMissDelay = timeToReachTarget + (BASE_TOLERANCE / actualGrowthSpeed) + 100; // 目標サイズ+最大許容範囲を超えるまでの時間 + 余裕
+
+    autoMissTimeoutId = setTimeout(function() {
+      if (running && currentCircleEl && currentCircleEl.dataset.circleGen == String(circleGen)) {
+        handleCircleCompletion(false); // 時間切れで失敗
+      }
+    }, autoMissDelay);
+  }
+
+  // 円がタップされた時の処理 (決まりごと11: 連打やでたらめなタップ対策)
+  function handleCircleTap(ev) {
+    ev.preventDefault();
+    ev.stopPropagation(); // fieldへのイベント伝播を停止 (fieldのミス判定が呼ばれないように)
+
+    // 現在の円でなければ何もしない (古いイベントや不正なタップの防止)
+    if (!running || currentCircleEl === null || currentCircleEl.dataset.circleGen !== String(circleGen)) {
+      return;
+    }
+
+    handleCircleCompletion(true); // タップによる処理
+  }
+
+  // 円が完了した時の共通処理 (成功/失敗)
+  function handleCircleCompletion(isTapped) {
+    if (!running) { // ゲームが既に停止しているなら何もしない
+      cancelAnimationFrame(animationFrameId);
+      return;
+    }
+
+    // 処理対象の円が既にない、または現在のゲームセッションの円ではない場合、無効な呼び出しとして処理しない。
+    // (fieldのpointerdownからの呼び出し時にcurrentCircleElがnullになる可能性を考慮)
+    if (!currentCircleEl || currentCircleEl.dataset.circleGen !== String(circleGen)) {
+      cancelAnimationFrame(animationFrameId);
+      return;
+    }
+
+    clearTimeout(autoMissTimeoutId); // 自動ミス処理タイマーをクリア
+    cancelAnimationFrame(animationFrameId); // アニメーションを停止
+
+    var tolerance = Math.max(3, BASE_TOLERANCE - (level - 1) * TOLERANCE_DECREASE_PER_LEVEL);
+    var diff = Math.abs(currentCircleSize - TARGET_SIZE);
+    var isHit = isTapped && (diff <= tolerance); // タップされた && 許容範囲内 => 成功
+
+    if (isHit) {
+      score += 1;
+      level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+      feedback(field.clientWidth / 2, field.clientHeight / 2, "+1", "good good-size");
+    } else { // 失敗時
+      feedback(field.clientWidth / 2, field.clientHeight / 2, "ミス!", "bad bad-size"); // 失敗時のフィードバックを大きく表示
+      lives -= 1; // ここでライフを減らす
+      render();   // UIを更新
+      if (lives <= 0) { // ゲームオーバー判定
+        endGame();
+        return; // ゲームオーバーになったら以降の処理は不要
+      }
+    }
+    
+    // ポップアニメーション開始
+    currentCircleEl.classList.add("tapped");
+
+    // アニメーション後に次の円を生成
+    setTimeout(function () {
+      removeEl(currentCircleEl);
+      removeEl(targetRingEl);
+      currentCircleEl = null; // 確実に null にする
+
+      if (running && lives > 0) { // ゲームが継続中かつライフがある場合のみ
+        startNewCircle();
+      }
+    }, ANIMATION_POP_DURATION);
+  }
+
+  // fieldの何もない場所をタップした時の処理 (決まりごと11: 何もない所のタップはミス)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    // このイベントリスナーは、growing-circleのpointerdownでstopPropagationされているため、
+    // 円の内部がタップされた時にはここには到達しない。
+    // つまり、ここが呼ばれるのは「何もない場所」をタップした場合。
+    // そのため、現在アクティブな円が存在すれば、その円への不正なタップとして扱う。
+    if (currentCircleEl && currentCircleEl.dataset.circleGen == String(circleGen)) {
+      handleCircleCompletion(false); // アクティブな円を「ミス」として強制終了
+    }
+    // アクティブな円がない、または古い円である場合は何もしない。
+    // (ゲームの性質上、常に円があるはずなので、このelseブロックに到達することは稀)
+  });
+
+  // ゲーム開始 (決まりごと3, 13)
+  function startGame() {
+    gameGen += 1; // 新しいゲームセッションの開始
+    
+    // 決まりごと14: タイマーやイベントの登録が二重にならないようにクリア
+    clearTimeout(autoMissTimeoutId);
+    cancelAnimationFrame(animationFrameId);
+    
+    // フィールドをクリア
+    removeEl(currentCircleEl);
+    removeEl(targetRingEl);
+    currentCircleEl = null; // 確実にnullにする
+    field.innerHTML = ""; // フィールド全体のDOMをクリア (念のため)
+
+    score = 0; level = 1; lives = 3; // スコア、レベル、ライフを初期化
+    render(); // UIを更新
+    overlay.style.display = "none"; // オーバーレイを隠す
+    running = true; // ゲームを走行中に設定
+
+    startNewCircle(); // 最初の円の生成と拡大開始
+  }
+
+  // ゲームオーバー (決まりごと13)
+  function endGame() {
+    running = false; // ゲーム停止
+    gameGen += 1; // 現在のゲームセッションを終了
+
+    // 決まりごと14: タイマーやイベントの登録が二重にならないようにクリア
+    clearTimeout(autoMissTimeoutId);
+    cancelAnimationFrame(animationFrameId);
+    
+    // フィールドから残っている円とリングを削除
+    removeEl(currentCircleEl);
+    removeEl(targetRingEl);
+    currentCircleEl = null; // 確実にnullにする
+    field.innerHTML = ""; // フィールド全体をクリア (念のため)
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // オーバーレイを表示
+  }
+
+  // スタートボタンのイベントリスナー (決まりごと3, 13)
+  startBtn.addEventListener("click", startGame);
+
+  // 初回レンダリング
+  render();
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

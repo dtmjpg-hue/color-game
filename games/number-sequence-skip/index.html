@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ナンバータップチャレンジ</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; font-weight: bold; } /* Rule text */
+  #field { position: relative; flex: 1; overflow: hidden; }
+  .number-box { position: absolute; border-radius: 12px; background: #555;
+    display: flex; align-items: center; justify-content: center; font-weight: bold;
+    box-shadow: 0 4px 8px rgba(0,0,0,0.3); transition: transform 0.1s ease-out, background 0.1s ease-out; }
+  .number-box.target-number { background: #ffd166; color: #3a2a00; box-shadow: 0 0 18px #ffd166; }
+  .number-box.tapped { animation: pop .2s ease-out forwards; pointer-events: none; }
+  @keyframes pop { to { transform: scale(1.7); opacity: 0; } }
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; text-shadow: 0 0 5px rgba(0,0,0,0.5); }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  .rule-change { color: #ffd166; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">タップ: 3の倍数</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ナンバータップチャレンジ</h1>
+    <div id="ovBody">
+      <p>画面に現れる数字を、上のルールに従ってタップ！</p>
+      <p>間違った数字や、何もない所をタップすると<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとゲームオーバー。<br>点数を重ねて、レベルアップを目指そう！</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var hintEl = document.getElementById("hint");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var spawnTimer = null;
+  var numbersOnField = []; // Array to keep track of numbers currently displayed
+
+  // Game specific variables
+  var currentRule = null;
+  var maxNumberValue = 100; // Max number to generate
+  var padding = 10; // Padding for numbers within field bounds
+  var prevScoreForRuleChange = -1; // To track when the rule was last changed by score
+
+  // Rule definitions
+  var rules = [
+    { text: "3の倍数", check: (n) => n % 3 === 0, color: "#ffd166" },
+    { text: "素数", check: (n) => isPrime(n), color: "#a0e0ff" },
+    { text: "偶数", check: (n) => n % 2 === 0, color: "#ffc0cb" },
+    { text: "奇数", check: (n) => n % 2 !== 0, color: "#98fb98" },
+    { text: "50より大きい数", check: (n) => n > 50, color: "#ffa500" },
+    { text: "100より小さい数", check: (n) => n < 100, color: "#87cefa" }
+  ];
+
+  // Utility function to check if a number is prime
+  function isPrime(num) {
+    if (num <= 1) return false;
+    if (num <= 3) return true;
+    if (num % 2 === 0 || num % 3 === 0) return false;
+    for (let i = 5; i * i <= num; i = i + 6) {
+      if (num % i === 0 || num % (i + 2) === 0) return false;
+    }
+    return true;
+  }
+
+  // Utility function to get a random integer within a range
+  function getRandomInt(min, max) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+  }
+
+  // Load best score from local storage
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("numbertap_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  // Save best score to local storage
+  function saveBest(v) {
+    try { localStorage.setItem("numbertap_best", String(v)); } catch (e) {}
+  }
+
+  // Update HUD elements
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+    if (currentRule) { // currentRuleが設定されていることを確認
+        hintEl.textContent = "タップ: " + currentRule.text;
+    } else {
+        hintEl.textContent = "タップ: -"; // 初期表示など、ルール未設定の場合
+    }
+  }
+
+  // Remove element from DOM
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // Display feedback message (+1, ミス!)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // Handle a game miss
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // Change the current game rule
+  function changeRule() {
+    var previousRule = currentRule;
+    do {
+        currentRule = rules[getRandomInt(0, rules.length - 1)];
+    } while (rules.length > 1 && currentRule === previousRule); // Avoid changing to the same rule immediately if possible
+    hintEl.style.color = currentRule.color; // Update hint text color based on rule
+    render();
+    // Provide visual feedback for rule change
+    feedback(field.offsetWidth / 2, field.offsetHeight / 2, currentRule.text + "!", "rule-change");
+  }
+
+  // Spawn a new number box
+  function spawnNumber(myGen) {
+    if (!running || myGen !== gen) return;
+
+    var fieldRect = field.getBoundingClientRect();
+    var numValue = getRandomInt(1, maxNumberValue);
+
+    // Calculate dynamic box size based on field dimensions
+    var boxWidth = Math.min(fieldRect.width / 4.5, fieldRect.height / 4.5); // Max 4.5 boxes across narrowest dimension
+    boxWidth = Math.max(60, boxWidth); // Ensure minimum size (e.g., 60px)
+
+    // Ensure number is within field boundaries
+    var x = getRandomInt(padding, Math.max(padding, fieldRect.width - boxWidth - padding));
+    var y = getRandomInt(padding, Math.max(padding, fieldRect.height - boxWidth - padding));
+
+    var el = document.createElement("div");
+    el.className = "number-box";
+    el.textContent = numValue;
+    el.style.width = boxWidth + "px";
+    el.style.height = boxWidth + "px";
+    el.style.fontSize = (boxWidth * 0.4) + "px"; // Dynamic font size
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    el.dataset.value = numValue; // Store the number value for easy access
+
+    // Highlight target numbers based on the current rule
+    if (currentRule.check(numValue)) {
+      el.classList.add("target-number");
+    }
+
+    var done = false; // Flag to prevent double tap/miss processing for a single number
+
+    el.addEventListener("pointerdown", function (ev) {
+      ev.preventDefault();
+      ev.stopPropagation(); // Prevent field's pointerdown from firing
+      if (done || !running || myGen !== gen) return;
+      done = true;
+
+      var clickedNumber = parseInt(el.dataset.value, 10);
+      var isCorrect = currentRule.check(clickedNumber);
+
+      if (isCorrect) {
+        score += 1;
+        level = 1 + Math.floor(score / 8); // Level up based on score
+        feedback(x, y, "+1", "good");
+        el.classList.add("tapped"); // Trigger removal animation
+        setTimeout(function () { removeEl(el); }, 220);
+      } else {
+        miss(x, y);
+        el.classList.add("tapped"); // Trigger removal animation for incorrect tap
+        setTimeout(function () { removeEl(el); }, 220);
+      }
+      removeNumberFromField(el); // Remove from internal tracking array
+      render();
+
+      // Check if it's time to change the rule
+      var ruleChangeThreshold = Math.max(3, 8 - Math.floor(level/2)); // Rule changes more frequently at higher levels
+      if (score > 0 && score % ruleChangeThreshold === 0 && score > prevScoreForRuleChange) {
+          changeRule();
+          prevScoreForRuleChange = score; // Update tracker
+      }
+    });
+    field.appendChild(el);
+    // Add to tracking array to manage its lifecycle
+    numbersOnField.push({el: el, value: numValue, myGen: myGen});
+
+    // Set a timer for the number to disappear (miss if not tapped)
+    var numberLifeMs = Math.max(800, 3000 - (level - 1) * 180); // Number stays less time at higher levels
+    el.lifeTimeout = setTimeout(function () {
+      if (done) return;
+      done = true;
+      removeEl(el);
+      removeNumberFromField(el);
+      // If the number was a target based on the current rule and not tapped, it's a miss
+      if (myGen === gen && currentRule.check(numValue)) {
+        miss(x, y);
+      }
+    }, numberLifeMs);
+
+    // Schedule next number spawn
+    // Dynamically calculate max numbers allowed based on field size and box size
+    var availableWidthSlots = Math.floor((fieldRect.width - padding * 2) / boxWidth);
+    var availableHeightSlots = Math.floor((fieldRect.height - padding * 2) / boxWidth);
+    var theoreticalMax = availableWidthSlots * availableHeightSlots;
+    var maxNumbersAllowed = 3 + Math.floor(level / 3);
+    // Cap the max numbers to prevent overcrowding, keeping some margin
+    maxNumbersAllowed = Math.min(maxNumbersAllowed, 8, Math.floor(theoreticalMax * 0.8)); // Max 8, or 80% of theoretical max
+    maxNumbersAllowed = Math.max(3, maxNumbersAllowed); // At least 3 numbers
+
+    var spawnIntervalMs = Math.max(300, 1500 - (level - 1) * 90); // New numbers appear faster at higher levels
+
+    // Only spawn a new number if current count is less than allowed max
+    if (numbersOnField.length < maxNumbersAllowed) {
+      spawnTimer = setTimeout(function () { spawnNumber(myGen); }, spawnIntervalMs);
+    } else {
+      // If max numbers reached, re-check after a short delay
+      spawnTimer = setTimeout(function() { spawnNumber(myGen); }, 500);
+    }
+  }
+
+  // Remove a number element from the internal tracking array
+  function removeNumberFromField(el) {
+    numbersOnField = numbersOnField.filter(item => item.el !== el);
+  }
+
+  // Handle taps on the field itself (not on a number box)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    var r = field.getBoundingClientRect();
+    miss(ev.clientX - r.left, ev.clientY - r.top);
+  });
+
+  // Start the game
+  function startGame() {
+    gen += 1; // Increment generation counter to invalidate old timers
+    var myGen = gen;
+    clearTimeout(spawnTimer); // Stop general spawn timer
+
+    // Clear all existing numbers and their individual timers
+    numbersOnField.forEach(item => {
+        clearTimeout(item.el.lifeTimeout);
+        removeEl(item.el);
+    });
+    numbersOnField = []; // Reset tracking array
+    field.innerHTML = ""; // Clear DOM elements
+
+    // Reset game state
+    score = 0; level = 1; lives = 3;
+    prevScoreForRuleChange = -1; // Reset rule change tracker
+    changeRule(); // Set initial rule and update display
+    render(); // Update HUD
+    overlay.style.display = "none"; // Hide start/game over screen
+    running = true;
+
+    // Start spawning numbers
+    spawnTimer = setTimeout(function () { spawnNumber(myGen); }, 500);
+  }
+
+  // End the game (game over)
+  function endGame() {
+    running = false;
+    gen += 1; // Increment generation to stop all pending game activities
+    clearTimeout(spawnTimer); // Stop general spawn timer
+
+    // Clear all numbers and their timers
+    numbersOnField.forEach(item => {
+        clearTimeout(item.el.lifeTimeout);
+        removeEl(item.el);
+    });
+    numbersOnField = []; // Reset tracking array
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); } // Save new best score
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex"; // Show game over screen
+  }
+
+  startBtn.addEventListener("click", startGame); // Attach start button handler
+  changeRule(); // Set an initial rule for the display (fixes JS error)
+  render();     // Initial render for HUD elements
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

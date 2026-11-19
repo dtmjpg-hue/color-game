@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ピタッと拡大！ターゲットタップ</title>
+<style>
+  /* 決まりごと2: 画面の幅に収まり、縦にも横にもスクロールしない */
+  /* 決まりごと1: HTML, CSS, JSを1ファイルに、外部リソースなし */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* HUD (Head-Up Display) */
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  /* 決まりごと9: スコア、レベル、ライフを常に表示 */
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  /* 決まりごと7: いま何をすればいいかを常に表示 */
+
+  /* ゲームフィールド */
+  #field {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+    background: #212121; /* 背景色 */
+    display: flex;
+    align-items: center; /* 子要素を中央に配置 */
+    justify-content: center; /* 子要素を中央に配置 */
+  }
+
+  /* ターゲット枠 (固定) */
+  .target-frame {
+    position: absolute; /* #fieldの中央に配置 */
+    width: var(--target-size-px);
+    height: var(--target-size-px);
+    border-radius: 50%;
+    border: 4px solid #ffd166; /* ターゲット枠の色 */
+    box-shadow: 0 0 16px rgba(255, 209, 102, 0.7);
+    pointer-events: none; /* ターゲット枠はタップ対象外 */
+    z-index: 1;
+  }
+
+  /* 拡大する図形 */
+  .expanding-shape {
+    position: absolute; /* #fieldの中央に配置 */
+    width: var(--base-shape-size-px);
+    height: var(--base-shape-size-px);
+    border-radius: 50%;
+    background: #7dffa0; /* 拡大図形の色 */
+    box-shadow: 0 0 12px rgba(125, 255, 160, 0.7);
+    transform-origin: center center;
+    z-index: 2; /* ターゲット枠より手前 */
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent; /* タップ時のハイライトを無効化 */
+  }
+
+  /* 成功時のアニメーション */
+  .expanding-shape.hit {
+    animation: pop-success .2s ease-out forwards;
+    background: #3aff90;
+  }
+  @keyframes pop-success {
+    0% { transform: scale(var(--target-scale-factor)); opacity: 1; } /* ターゲットサイズから開始 */
+    100% { transform: scale(calc(var(--target-scale-factor) * 1.2)); opacity: 0; } /* 少し拡大して消える */
+  }
+
+  /* ミス時のアニメーション (タップミス、またはタイムアウト) */
+  .expanding-shape.bad-tap {
+    animation: pop-fail .2s ease-out forwards;
+    background: #ff7d7d;
+  }
+  @keyframes pop-fail {
+    0% { transform: scale(var(--current-scale-factor)); opacity: 1; } /* ミス時の図形のサイズから開始 */
+    100% { transform: scale(calc(var(--current-scale-factor) * 1.2)); opacity: 0; } /* 少し拡大して消える */
+  }
+
+
+  /* フィードバックテキスト (得点やミス表示) */
+  .fb {
+    position: absolute;
+    /* #fieldの中央を基準に、中央から上へ移動 */
+    transform: translate(-50%, -50%); /* 要素の中心を基準に位置調整 */
+    font-size: 24px;
+    font-weight: bold;
+    pointer-events: none;
+    animation: rise .6s ease-out forwards;
+    z-index: 100;
+  }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise {
+    to { transform: translate(-50%, -86px) scale(1.2); opacity: 0; } /* 中央から上へ移動しながら消える */
+  }
+  /* 決まりごと8: タップの結果がその場ですぐわかる */
+
+  /* オーバーレイ (開始画面、ゲームオーバー画面) */
+  #overlay {
+    position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10;
+  }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button {
+    margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer;
+  }
+  /* 決まりごと3: 遊び方表示とスタートボタン */
+  /* 決まりごと13: ゲームオーバー表示ともういちどボタン */
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">ターゲットに合った瞬間にタップ！ミスするとライフが減るよ</div>
+  </div>
+  <div id="field">
+    <!-- ターゲット枠はstartGame時に追加 -->
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">ピタッと拡大！ターゲットタップ</h1>
+    <div id="ovBody">
+      <p>中心から<b>拡大する丸</b>が、背景の<b>ターゲット枠</b>と同じサイズになった瞬間にタップしよう！</p>
+      <p>早すぎても遅すぎても<b>ミス</b>。ターゲットを逃したり、何もない所をタップしても<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、難しくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var currentShape = null; // 現在拡大中の図形要素
+  var missTimer = null;    // タップせずに拡大しすぎた場合のタイマー
+  var currentGen = 0;      // 現在のゲームラウンドの世代
+
+  // --- ゲーム設定 ---
+  var BASE_SHAPE_SIZE_PX = 30; // 拡大図形の開始時の幅と高さ (px)
+  var TARGET_SIZE_PX = 120;    // 目標とする幅と高さ (px)
+  var MAX_SIZE_PX = 180;       // 最大拡大時の幅と高さ (px)
+
+  var START_SCALE_FACTOR = 1; // BASE_SHAPE_SIZE_PXを基準としたスケール
+  var TARGET_SCALE_FACTOR = TARGET_SIZE_PX / BASE_SHAPE_SIZE_PX;
+  var MAX_SCALE_FACTOR = MAX_SIZE_PX / BASE_SHAPE_SIZE_PX;
+
+  // 決まりごと10: 成功を重ねるほど難しくなる (速度が上がる、許容範囲が狭まる)
+  function getAnimationDuration(level) {
+    // 拡大アニメーションの総時間 (ms)。レベルが上がると短縮。
+    return Math.max(800, 2500 - (level - 1) * 150);
+  }
+
+  function getToleranceMs(level) {
+    // ターゲットサイズからの許容誤差時間 (ms)。レベルが上がると短縮。
+    return Math.max(50, 200 - (level - 1) * 15);
+  }
+  // --- ゲーム設定ここまで ---
+
+  // ベストスコアの読み書き (お手本から流用)
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("expand_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("expand_best", String(v)); } catch (e) {}
+  }
+
+  // HUDの表示更新
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // 要素の削除ヘルパー
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // フィードバック表示 (得点やミス)
+  function feedback(text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理 (ライフ減少、ゲームオーバー判定、次のラウンドへ)
+  function miss(isTimeout) {
+    // 決まりごと11: 何もない所のタップや、間違いはミスになる
+    if (!running || currentGen !== gen) return; // 現在のゲームラウンド以外では処理しない
+    lives -= 1;
+    feedback(isTimeout ? "ミス!" : "ミス!", "bad"); // 決まりごと8: タップの結果がその場ですぐわかる
+    render(); // 決まりごと6: 残りライフを表示
+    if (lives <= 0) {
+      endGame(); // 決まりごと6: ライフがなくなるとゲームオーバー
+    } else {
+      startRound(); // 決まりごと6: ライフがあればゲーム続行
+    }
+  }
+
+  // 拡大図形のタップイベントハンドラ
+  function handleShapeTap(event) {
+    event.preventDefault();
+    event.stopPropagation(); // fieldへのイベント伝播を止める
+
+    if (!running || currentShape !== event.currentTarget || currentShape.dataset.gen !== String(gen)) return;
+
+    clearTimeout(missTimer); // タップしたのでタイムアウトは不要に
+    missTimer = null; // nullでクリア
+
+    var tappedTime = Date.now();
+    var creationTime = parseInt(currentShape.dataset.creationTime, 10);
+    var currentAnimationDuration = parseInt(currentShape.dataset.animationDuration, 10);
+    var currentToleranceMs = parseInt(currentShape.dataset.toleranceMs, 10);
+
+    var elapsedTime = tappedTime - creationTime;
+
+    // ターゲットスケールに到達するまでの理論上の時間
+    var targetReachDuration = currentAnimationDuration * ((TARGET_SCALE_FACTOR - START_SCALE_FACTOR) / (MAX_SCALE_FACTOR - START_SCALE_FACTOR));
+
+    var timeDiff = Math.abs(elapsedTime - targetReachDuration);
+
+    // タップ時の拡大スケールを計算（ミス時のアニメーション用）
+    var currentScale = START_SCALE_FACTOR + (MAX_SCALE_FACTOR - START_SCALE_FACTOR) * (elapsedTime / currentAnimationDuration);
+    currentShape.style.setProperty('--current-scale-factor', currentScale);
+
+    if (timeDiff <= currentToleranceMs) {
+      // 成功
+      score += 1; // 決まりごと12: 何もしていないときにスコアが増えない (タップ成功時のみ増える)
+      level = 1 + Math.floor(score / 5); // お手本と同じロジックでレベルアップ
+      feedback("+1", "good"); // 決まりごと8: タップの結果がその場ですぐわかる
+      render();
+      currentShape.classList.add("hit"); // 成功時のアニメーションクラス追加
+      currentShape.removeEventListener("pointerdown", handleShapeTap);
+      currentShape.style.pointerEvents = 'none'; // 再タップ防止
+
+      // アニメーション後に次のラウンドを開始
+      setTimeout(function() {
+        removeEl(currentShape);
+        currentShape = null; // 削除後にnullをセット
+        if (running && currentGen === gen) { // 成功後もゲームが続いているか確認
+           startRound();
+        }
+      }, 220); // CSSアニメーションの時間に合わせて調整
+    } else {
+      // ミス (早すぎ/遅すぎ)
+      currentShape.removeEventListener("pointerdown", handleShapeTap);
+      currentShape.style.pointerEvents = 'none'; // 再タップ防止
+      currentShape.classList.add("bad-tap"); // ミス時のアニメーションクラス追加
+
+      // アニメーション後に図形を削除し、ミス処理
+      setTimeout(function() {
+        removeEl(currentShape);
+        currentShape = null; // 削除後にnullをセット
+      }, 220); // CSSアニメーションの時間に合わせて調整
+      miss(false); // タップによるミス
+    }
+  }
+
+  // タイムアウトによるミス処理 (タップせずにターゲットを逃した)
+  function handleMissTimeout() {
+    // 決まりごと11: 連打や、でたらめなタップでは、高い点が取れない (ターゲットを逃すとミス)
+    if (!running || !currentShape || currentShape.dataset.gen !== String(gen)) return;
+
+    currentShape.removeEventListener("pointerdown", handleShapeTap);
+    currentShape.style.pointerEvents = 'none';
+    currentShape.classList.add("bad-tap"); // タイムアウトミス時のアニメーションクラス追加
+    currentShape.style.setProperty('--current-scale-factor', MAX_SCALE_FACTOR); // 最大スケールでミスしたとしてアニメーション
+
+    setTimeout(function() {
+      removeEl(currentShape);
+      currentShape = null; // 削除後にnullをセット
+    }, 220); // CSSアニメーションの時間に合わせて調整
+    miss(true); // タイムアウトによるミス
+  }
+
+  // 新しいラウンドの開始
+  function startRound() {
+    if (!running) return;
+
+    currentGen = gen; // 現在のゲーム世代をこのラウンドに紐付け
+
+    if (currentShape) {
+      // 前の図形が残っていたら削除 (ゲームオーバーからのリスタート時など)
+      currentShape.removeEventListener("pointerdown", handleShapeTap);
+      currentShape.style.pointerEvents = 'none';
+      removeEl(currentShape);
+      currentShape = null;
+    }
+    clearTimeout(missTimer); // 前のタイマーをクリア
+    missTimer = null;
+
+    var animationDuration = getAnimationDuration(level);
+    var toleranceMs = getToleranceMs(level);
+
+    var el = document.createElement("div");
+    el.className = "expanding-shape";
+    el.style.setProperty('--base-shape-size-px', BASE_SHAPE_SIZE_PX + 'px');
+    el.style.setProperty('--target-scale-factor', TARGET_SCALE_FACTOR);
+    el.style.width = BASE_SHAPE_SIZE_PX + "px";
+    el.style.height = BASE_SHAPE_SIZE_PX + "px";
+    el.style.transform = "scale(" + START_SCALE_FACTOR + ")"; // 初期スケール
+    el.style.transition = "none"; // 初期状態ではtransitionを無効にする
+
+    el.dataset.creationTime = Date.now();
+    el.dataset.animationDuration = animationDuration;
+    el.dataset.toleranceMs = toleranceMs;
+    el.dataset.gen = currentGen; // 図形にも世代を記録
+
+    currentShape = el;
+    field.appendChild(el);
+
+    // requestAnimationFrameを使って、ブラウザがDOMの変更を反映してからアニメーションを開始
+    requestAnimationFrame(function () {
+      if (!running || gen !== currentGen || el !== currentShape) {
+        // 世代が変わってしまった、またはcurrentShapeが別物になった場合は処理しない
+        removeEl(el); // 不要な要素が残るのを防ぐ
+        return;
+      }
+
+      el.style.transition = 'transform ' + animationDuration + 'ms linear';
+      el.style.transform = 'scale(' + MAX_SCALE_FACTOR + ')';
+
+      el.addEventListener("pointerdown", handleShapeTap);
+
+      // ターゲット到達時間 + 許容範囲を超えたらミス (タップしなかった場合)
+      var targetReachDuration = animationDuration * ((TARGET_SCALE_FACTOR - START_SCALE_FACTOR) / (MAX_SCALE_FACTOR - START_SCALE_FACTOR));
+      missTimer = setTimeout(function () {
+        if (gen === currentGen && el === currentShape) { // 世代と図形が一致するか確認
+          handleMissTimeout();
+        }
+      }, targetReachDuration + toleranceMs);
+    });
+  }
+
+  // field全体へのタップ処理 (何も無い場所をタップした場合)
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    // 決まりごと11: 何もない所のタップはミス
+    miss(false);
+  });
+
+  // ゲーム開始
+  function startGame() {
+    // 決まりごと14: 「もういちど」を何度押しても、タイマーやイベントの登録が二重にならない
+    gen += 1; // 世代を更新して、以前のタイマーやイベントハンドラの動作を無効化
+    clearTimeout(missTimer);
+    missTimer = null;
+    if (currentShape) {
+      currentShape.removeEventListener("pointerdown", handleShapeTap);
+      removeEl(currentShape);
+      currentShape = null;
+    }
+    field.innerHTML = ''; // フィールドをクリア
+    // ターゲット枠をフィールドに追加
+    var targetFrameEl = document.createElement("div");
+    targetFrameEl.className = "target-frame";
+    targetFrameEl.style.setProperty('--target-size-px', TARGET_SIZE_PX + 'px');
+    field.appendChild(targetFrameEl);
+
+    score = 0; level = 1; lives = 3;
+    render();
+    overlay.style.display = "none";
+    running = true;
+    startRound(); // 最初のラウンド開始
+  }
+
+  // ゲームオーバー
+  function endGame() {
+    // 決まりごと13: ゲームオーバーで最終スコア表示と「もういちど」ボタン
+    running = false;
+    gen += 1; // 世代を更新して、残っているタイマーやイベントが動作しないようにする
+    clearTimeout(missTimer);
+    missTimer = null;
+    if (currentShape) {
+      currentShape.removeEventListener("pointerdown", handleShapeTap);
+      removeEl(currentShape);
+      currentShape = null;
+    }
+    field.innerHTML = ""; // フィールドをクリア (ターゲット枠も消える)
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  // スタートボタンにイベントリスナーを設定
+  startBtn.addEventListener("click", startGame);
+
+  // 初期描画
+  render();
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

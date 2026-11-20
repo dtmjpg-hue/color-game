@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ラインストップ</title>
+<style>
+  /* お手本からの共通スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+  
+  /* フィールドとゲーム要素のスタイル */
+  #field { position: relative; flex: 1; overflow: hidden; background: #223355; } /* ゲームエリアの背景色 */
+
+  .target-area {
+    position: absolute;
+    width: 80%; /* 画面幅に対するターゲット領域の幅 */
+    height: 40px; /* 初期高さ */
+    background: rgba(255, 210, 102, 0.2); /* 半透明のターゲット領域 */
+    border: 2px solid #ffd166; /* ターゲット領域の枠線 */
+    left: 10%; /* 左右中央寄せ (10% + 80% + 10%) */
+    /* topはJSで計算 */
+    border-radius: 4px;
+  }
+  .target-center-line {
+    position: absolute;
+    width: 80%;
+    height: 2px; /* 中心線の太さ */
+    background: #ffd166; /* 中心線の色 */
+    left: 10%;
+    /* topはJSで計算 */
+  }
+  .moving-line {
+    position: absolute;
+    width: 10px; /* 線の幅 */
+    background: #7dffa0; /* 線の色 */
+    bottom: 0; /* 画面下部から伸びる */
+    left: 50%; /* 左右中央寄せ */
+    transform: translateX(-50%); /* 中央寄せの補正 */
+    height: 0; /* 初期高さ */
+  }
+
+  /* フィードバック (お手本と同じ) */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; text-align: center; width: 100px; margin-left: -50px; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイ (お手本と同じ) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">線がターゲットの中心に来るようにタップ！</div>
+  </div>
+  <div id="field"></div>
+  <div id="overlay">
+    <h1 id="ovTitle">ラインストップ</h1>
+    <div id="ovBody">
+      <p>画面下から伸びる線が、上部の<b>ターゲット領域の中心</b>に重なるように、画面をタップして止めよう！</p>
+      <p>ピタリと止めると高得点！ずれてもターゲット内なら得点。領域外や早すぎるタップは<b>ミス</b>。</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>レベルが上がると線が速くなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+
+  var lineElement = null;
+  var targetAreaElement = null;
+  var targetCenterLineElement = null;
+
+  var animationFrameId = null;
+  var lineHeight = 0; // 現在の線の高さ (px)
+  var lineSpeed = 0;  // 線の伸びる速度 (px/ms)
+  var lastFrameTime = 0; // requestAnimationFrameのタイムスタンプ
+
+  var fieldHeight = 0;
+  var fieldWidth = 0;
+
+  // ゲームパラメータ
+  var baseLineSpeed = 0.15; // 初期線の伸びる速度 (px/ms)
+  var speedIncreasePerLevel = 0.02; // レベルごとの速度増加 (px/ms)
+  var baseTargetHeight = 40; // ターゲット領域の初期高さ (px)
+  var targetHeightDecreasePerLevel = 3; // レベルごとのターゲット高さ減少 (px) (最小10px)
+  var centerLineTolerance = 3; // PERFECT判定の許容誤差 (px)
+  var overshootMissTolerance = 15; // ターゲットを通り過ぎてミスとなる許容誤差 (px)
+  var targetAreaTopRatio = 0.15; // ターゲット領域のfieldに対する上からの位置 (15%)
+
+  // ベストスコアの保存と読み込み (お手本を流用)
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("line_stop_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("line_stop_best", String(v)); } catch (e) {}
+  }
+
+  // UIの更新 (お手本を流用)
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // 要素の削除 (お手本を流用)
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // フィードバック表示 (お手本を流用し、位置を調整)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    // X座標はタップ位置のままだと見にくいので、ラインの中央に調整。Y座標はタップ位置から少し上。
+    f.style.left = fieldWidth / 2 + "px"; // 常にフィールド中央に表示
+    f.style.top = y - 20 + "px"; // タップ位置より少し上
+    field.appendChild(f);
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // ミス処理
+  function miss(tapX, tapY, reason) {
+    if (!running) return;
+    lives -= 1;
+    feedback(tapX, tapY, reason, "bad");
+    render();
+    if (lives <= 0) {
+      endGame();
+    } else {
+      // ミスしても次のラインを生成してゲームを続ける
+      setTimeout(createNextLineTarget, 500); // 少し間を置いて次のライン
+    }
+  }
+
+  // ゲーム要素 (ライン、ターゲット) の作成
+  function createGameElements() {
+    field.innerHTML = ""; // 既存の要素をクリア
+
+    targetAreaElement = document.createElement("div");
+    targetAreaElement.className = "target-area";
+    field.appendChild(targetAreaElement);
+
+    targetCenterLineElement = document.createElement("div");
+    targetCenterLineElement.className = "target-center-line";
+    field.appendChild(targetCenterLineElement);
+
+    lineElement = document.createElement("div");
+    lineElement.className = "moving-line";
+    field.appendChild(lineElement);
+  }
+
+  // レベルに応じたゲームパラメータの更新
+  function updateLineAndTargetParameters() {
+    fieldHeight = field.clientHeight;
+    fieldWidth = field.clientWidth;
+
+    // 線の速度
+    lineSpeed = baseLineSpeed + (level - 1) * speedIncreasePerLevel;
+    
+    // ターゲットの高さ (難易度に応じて小さくなる)
+    var currentTargetHeight = Math.max(10, baseTargetHeight - (level - 1) * targetHeightDecreasePerLevel);
+    targetAreaElement.style.height = currentTargetHeight + "px";
+    
+    // ターゲット領域の絶対位置計算 (fieldのtop基準)
+    var targetAreaTop = fieldHeight * targetAreaTopRatio;
+    targetAreaElement.style.top = targetAreaTop + "px";
+    targetCenterLineElement.style.top = (targetAreaTop + currentTargetHeight / 2 - 1) + "px"; // 中心線 (height:2px) の中央
+
+    // 線の幅 (画面幅に応じて調整、最小5px)
+    lineElement.style.width = Math.max(5, fieldWidth / 25) + "px";
+  }
+
+  // requestAnimationFrameアニメーションの停止
+  function stopGameAnimation() {
+    if (animationFrameId) {
+      cancelAnimationFrame(animationFrameId);
+      animationFrameId = null;
+    }
+  }
+
+  var gameGen = 0; // ゲームの世代ID。startGame()ごとに更新され、古いアニメーションが実行されないようにする。
+
+  // ラインのアニメーションループ
+  function animateLine(timestamp) {
+    // 実行中のゲームと世代が異なる場合、アニメーションを停止
+    if (!running || gen !== gameGen) { 
+      stopGameAnimation();
+      return;
+    }
+
+    if (!lastFrameTime) {
+      lastFrameTime = timestamp;
+    }
+    var deltaTime = timestamp - lastFrameTime;
+
+    lineHeight += lineSpeed * deltaTime;
+    lineElement.style.height = lineHeight + "px";
+
+    // 線の最上部のY座標 (fieldのtop基準)
+    var lineTopPos = fieldHeight - lineHeight; 
+    
+    // ターゲット領域のY座標 (fieldのtop基準)
+    var targetAreaTop = targetAreaElement.offsetTop;
+
+    // 線がターゲットを通り過ぎた場合のミス判定
+    // (targetAreaTop - overshootMissTolerance) より上に線が伸びてしまったらミス
+    if (lineTopPos < targetAreaTop - overshootMissTolerance) {
+      stopGameAnimation();
+      // ミスフィードバックの位置は、ターゲット領域の中央付近
+      miss(fieldWidth / 2, targetAreaTop + targetAreaElement.offsetHeight / 2, "タイミングが遅すぎた!");
+      return;
+    }
+
+    lastFrameTime = timestamp;
+    animationFrameId = requestAnimationFrame(animateLine);
+  }
+
+  // プレイヤーのタップ処理
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    
+    // タップ位置の計算（フィードバック用）
+    var rect = field.getBoundingClientRect();
+    var tapX = ev.clientX - rect.left;
+    var tapY = ev.clientY - rect.top;
+
+    if (animationFrameId === null) {
+      // アニメーションが開始されていない、または既に停止している場合 (早すぎるタップ)
+      miss(tapX, tapY, "早すぎた!");
+      return;
+    }
+
+    stopGameAnimation(); // タップでアニメーションを停止
+
+    // 判定ロジック
+    var lineTopPos = fieldHeight - lineHeight; // 線の最上部のY座標 (fieldのtop基準)
+    var targetTop = targetAreaElement.offsetTop;
+    var targetBottom = targetTop + targetAreaElement.offsetHeight;
+    var targetCenter = targetTop + targetAreaElement.offsetHeight / 2;
+
+    var diff = Math.abs(lineTopPos - targetCenter);
+
+    if (diff <= centerLineTolerance) {
+      // PERFECT HIT: 中心線にピタリと止まった場合
+      score += 3;
+      feedback(tapX, tapY, "+3 PERFECT!", "good");
+      level = 1 + Math.floor(score / 10); // 10点ごとにレベルアップ
+      createNextLineTarget();
+    } else if (lineTopPos <= targetBottom && lineTopPos >= targetTop) {
+      // GOOD HIT: ターゲット領域内には収まったが、中心線とはずれた場合
+      score += 1;
+      feedback(tapX, tapY, "+1 GOOD!", "good");
+      level = 1 + Math.floor(score / 10);
+      createNextLineTarget();
+    } else {
+      // MISS: ターゲット領域外で止まった場合
+      // (早すぎるタップ、またはターゲットを通り過ぎてしまったがovershootMissTolerance内だった場合)
+      miss(tapX, tapY, "ミス!"); // miss関数内で次のラインが生成される
+    }
+
+    render(); // スコアやレベル、ライフを更新
+  });
+
+  // 次のラインとターゲットの準備
+  function createNextLineTarget() {
+    stopGameAnimation(); // 念のため既存のアニメーションを停止
+    lineHeight = 0; // 線の高さをリセット
+    lineElement.style.height = "0px"; // DOM要素の高さもリセット
+    
+    updateLineAndTargetParameters(); // レベルに応じてパラメータを更新
+
+    lastFrameTime = 0; // デルタタイム計算のためリセット
+    gameGen = gen; // 現在のゲーム世代を記録
+    animationFrameId = requestAnimationFrame(animateLine); // 新しいアニメーションを開始
+  }
+
+  // ゲーム開始処理 (お手本を流用)
+  function startGame() {
+    gen += 1; // ゲーム世代を更新
+    gameGen = gen;
+    stopGameAnimation(); // 既存のアニメーションがあれば停止
+    field.innerHTML = ""; // フィールドの全要素をクリア
+    score = 0; level = 1; lives = 3;
+    render();
+    overlay.style.display = "none";
+    running = true;
+
+    createGameElements(); // ゲーム要素を再作成
+    updateLineAndTargetParameters(); // パラメータを初期レベルに合わせて更新
+    createNextLineTarget(); // 最初のラインをスタート
+  }
+
+  // ゲームオーバー処理 (お手本を流用)
+  function endGame() {
+    running = false;
+    gen += 1; // ゲーム世代を更新して、残りのアニメーションフレームが停止するようにする
+    stopGameAnimation(); // アニメーションを停止
+    field.innerHTML = ""; // フィールドの全要素をクリア
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  startBtn.addEventListener("click", startGame);
+  render(); // 初回表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ミラータップチャレンジ</title>
+<style>
+  /* 決まりごと2, 1 を満たすための基本スタイル */
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #14213d; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+
+  /* お手本に倣ったHUD (Head-Up Display) */
+  #hud { padding: 10px 14px; background: #0d1730; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #ffd166; }
+
+  /* ゲームフィールドのスタイル: 左右に分割 */
+  #field { position: relative; flex: 1; display: flex; overflow: hidden; }
+  #sourceArea, #targetArea { flex: 1; position: relative; overflow: hidden; }
+  #sourceArea { background: #0d1730; } /* 図形が現れる側 */
+  #targetArea { background: #1a2745; border-left: 2px solid #5a5a5a; } /* タップする側、区切り線 */
+
+  /* 出現する図形のスタイル */
+  .shape { position: absolute; width: 48px; height: 48px; background: #ffd166; border-radius: 8px; /* 四角形 */
+    box-shadow: 0 0 12px #ffd166; }
+  /* 図形が時間切れで消える際のアニメーション */
+  .shape.faded { animation: fadeOut .3s ease-out forwards; pointer-events: none; }
+  @keyframes fadeOut { to { transform: scale(0.8); opacity: 0; } }
+
+  /* タップフィードバックのスタイル (お手本を流用) */
+  .fb { position: absolute; font-size: 22px; font-weight: bold; pointer-events: none; animation: rise .6s ease-out forwards; }
+  .good { color: #7dffa0; }
+  .bad { color: #ff7d7d; }
+  .info { color: #ffd166; } /* 追加: 「もう消えた」「済」などの情報表示用 */
+  @keyframes rise { to { transform: translateY(-36px); opacity: 0; } }
+
+  /* オーバーレイのスタイル (お手本を流用) */
+  #overlay { position: absolute; inset: 0; background: rgba(8,14,30,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 28px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 44px; font-weight: bold; color: #ffd166; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #ffd166; border: none; border-radius: 14px; cursor: pointer; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">左に出る図形のミラー位置を右にタップ！</div>
+  </div>
+  <div id="field">
+    <div id="sourceArea"></div>
+    <div id="targetArea"></div>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">ミラータップチャレンジ</h1>
+    <div id="ovBody">
+      <p>左の画面に<b>素早く現れる図形</b>をよく見て、</p>
+      <p>右の画面の<b>ミラーイメージの位置</b>をタップしよう！</p>
+      <p>ライフは3つ。3回ミスするとおしまい。<br>点数が上がるとレベルが上がって、難しくなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  var sourceArea = document.getElementById("sourceArea");
+  var targetArea = document.getElementById("targetArea");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  var score = 0, level = 1, lives = 3, running = false, gen = 0;
+  var spawnTimer = null;
+  var activeShapes = []; // 現在表示中の図形を管理する配列
+
+  var SHAPE_SIZE = 48; // 図形のサイズ (px)
+  var TAP_TOLERANCE = 15; // タップ判定の許容誤差 (px)
+  var FADE_ANIMATION_TIME = 300; // 図形がフェードアウトするアニメーションの時間 (ms)
+
+  // ベストスコアのロード・セーブ (お手本を流用)
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("mirror_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("mirror_best", String(v)); } catch (e) {}
+  }
+
+  // スコア・レベル・ライフの表示更新 (お手本を流用)
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  // DOM要素の削除ヘルパー (お手本を流用)
+  function removeEl(el) {
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // タップフィードバック表示 (お手本を流用し、targetAreaに表示するように変更)
+  function feedback(x, y, text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.left = x + "px";
+    f.style.top = y + "px";
+    targetArea.appendChild(f); // フィードバックはタップしたtargetAreaに表示
+    setTimeout(function () { removeEl(f); }, 650);
+  }
+
+  // 図形をactiveShapes配列とDOMから削除
+  // statusを更新する責任は呼び出し元にある
+  function removeShapeFromListAndDOM(shapeId) {
+    var shapeIndex = -1;
+    for (var i = 0; i < activeShapes.length; i++) {
+        if (activeShapes[i].id === shapeId) {
+            shapeIndex = i;
+            break;
+        }
+    }
+    if (shapeIndex === -1) return; // 既に削除済みなど
+
+    var shapeObj = activeShapes[shapeIndex];
+    removeEl(shapeObj.el); // DOMから削除
+    activeShapes.splice(shapeIndex, 1); // activeShapes配列から削除
+  }
+
+  // ミス処理
+  // この関数はライフを減らし、フィードバックを表示する責任を持つ。
+  // 特定の図形に紐づくミス（時間切れ）の場合でも、この関数自体は図形の状態を変更しない。
+  function miss(x, y) {
+    if (!running) return;
+    lives -= 1;
+    feedback(x, y, "ミス!", "bad");
+    render();
+    if (lives <= 0) endGame();
+  }
+
+  // 図形の生成
+  function spawn(myGen) {
+    if (!running || myGen !== gen) return;
+
+    var sourceRect = sourceArea.getBoundingClientRect();
+    if (sourceRect.width <= SHAPE_SIZE || sourceRect.height <= SHAPE_SIZE) {
+        // 画面が小さすぎて図形を配置できない場合は、少し待って再試行
+        spawnTimer = setTimeout(function () { spawn(myGen); }, 500);
+        return;
+    }
+
+    // sourceArea内にランダムな位置を決定
+    var x = Math.floor(Math.random() * (sourceRect.width - SHAPE_SIZE));
+    var y = Math.floor(Math.random() * (sourceRect.height - SHAPE_SIZE));
+
+    var el = document.createElement("div");
+    el.className = "shape";
+    el.style.left = x + "px";
+    el.style.top = y + "px";
+    var shapeId = "shape_" + Date.now() + "_" + Math.floor(Math.random() * 1000); // ユニークID
+    el.dataset.shapeId = shapeId; // データ属性にIDを保存
+    sourceArea.appendChild(el);
+
+    var shapeObj = {
+      id: shapeId,
+      x: x, // sourceArea内での相対X座標
+      y: y, // sourceArea内での相対Y座標
+      width: SHAPE_SIZE,
+      height: SHAPE_SIZE,
+      el: el,
+      timeoutId: null,
+      status: 'active' // 図形の状態: 'active', 'expired', 'tapped_ok'
+    };
+    activeShapes.push(shapeObj);
+
+    // 図形が時間切れで消える処理 (難易度に応じて時間短縮)
+    var lifeMs = Math.max(400, 1500 - (level - 1) * 100);
+    shapeObj.timeoutId = setTimeout(function () {
+      if (running && myGen === gen && shapeObj.status === 'active') { // まだアクティブな状態なら時間切れミス
+          shapeObj.status = 'expired'; // 状態を「時間切れ」に更新
+
+          // タップフィードバックの位置はミラー位置の中央にする
+          var sourceRectWidth = sourceArea.getBoundingClientRect().width;
+          var mirrorLeft = sourceRectWidth - (shapeObj.x + shapeObj.width);
+          var mirrorTop = shapeObj.y;
+          miss(mirrorLeft + SHAPE_SIZE / 2, mirrorTop + SHAPE_SIZE / 2); // ミス処理 (ライフ減少、フィードバック表示)
+          
+          shapeObj.el.classList.add("faded"); // フェードアウトアニメーション
+          setTimeout(function() { removeShapeFromListAndDOM(shapeObj.id); }, FADE_ANIMATION_TIME);
+      }
+    }, lifeMs);
+
+    // 次の図形を生成するまでの間隔 (難易度に応じて短縮)
+    var nextMs = Math.max(300, 1000 - (level - 1) * 70);
+    spawnTimer = setTimeout(function () { spawn(myGen); }, nextMs);
+  }
+
+  // targetAreaでのタップイベント処理
+  targetArea.addEventListener("pointerdown", function (ev) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    if (!running) return;
+
+    var targetRect = targetArea.getBoundingClientRect();
+    var tapX = ev.clientX - targetRect.left; // targetArea内の相対X座標
+    var tapY = ev.clientY - targetRect.top;  // targetArea内の相対Y座標
+
+    var hitShape = null;
+    var sourceRectWidth = sourceArea.getBoundingClientRect().width; // sourceAreaの幅 (targetAreaと同じ)
+
+    // 現在表示中の図形をループし、タップ位置がミラーイメージの範囲内か判定
+    for (var i = 0; i < activeShapes.length; i++) {
+        var shape = activeShapes[i];
+        
+        // sourceAreaの左端からのx座標にある図形は、targetAreaの右端からのx座標にミラーされる
+        var mirrorLeft = sourceRectWidth - (shape.x + shape.width); // ミラー図形の左端
+        var mirrorRight = sourceRectWidth - shape.x;                 // ミラー図形の右端
+        var mirrorTop = shape.y;                                     // ミラー図形の上端
+        var mirrorBottom = shape.y + shape.height;                   // ミラー図形の下端
+
+        // タップ位置がミラー図形の範囲内か (許容誤差を含む)
+        if (tapX >= mirrorLeft - TAP_TOLERANCE && tapX <= mirrorRight + TAP_TOLERANCE &&
+            tapY >= mirrorTop - TAP_TOLERANCE && tapY <= mirrorBottom + TAP_TOLERANCE) {
+            hitShape = shape;
+            break; // 最初にヒットした図形を対象とする
+        }
+    }
+
+    if (hitShape) {
+        if (hitShape.status === 'active') { // まだタップされていないアクティブな図形
+            score += 1;
+            level = 1 + Math.floor(score / 5); // 5点ごとにレベルアップ
+            feedback(tapX, tapY, "+1", "good");
+            render();
+            
+            hitShape.status = 'tapped_ok'; // 状態を「成功タップ済み」に更新
+            clearTimeout(hitShape.timeoutId); // 時間切れタイマーを停止
+            hitShape.el.classList.add("faded"); // フェードアウトアニメーション
+            setTimeout(function() { removeShapeFromListAndDOM(hitShape.id); }, FADE_ANIMATION_TIME);
+        } else if (hitShape.status === 'expired') { // 時間切れで既にミスになった図形
+            feedback(tapX, tapY, "もう消えた", "info"); // ライフは減らさない
+            // 何もせず、アニメーションが完了しDOMから削除されるのを待つ
+        } else if (hitShape.status === 'tapped_ok') { // 既に成功タップされた図形
+            feedback(tapX, tapY, "済", "info"); // ライフは減らさない、得点も増えない
+            // 何もせず、アニメーションが完了しDOMから削除されるのを待つ
+        }
+    } else {
+      // どこもヒットしなかった場合はミス (何もない場所をタップ)
+      miss(tapX, tapY);
+    }
+  });
+
+  // sourceAreaをタップしても何も起こらないようにする (ミスではない)
+  // (決まりごと11「何もない所のタップや、まちがいは、ミスになる」はtargetArea内でのプレイミスを想定)
+  sourceArea.addEventListener("pointerdown", function(ev) {
+      ev.preventDefault();
+      ev.stopPropagation(); // sourceArea内の図形や背景をタップしてもイベントを止める
+  });
+
+  // ゲーム開始処理 (お手本を流用し、ゲーム固有の要素をリセット)
+  function startGame() {
+    gen += 1; // 世代カウンターを更新
+    var myGen = gen;
+    clearTimeout(spawnTimer); // 既存のタイマーをクリア
+    
+    // 全ての図形をDOMから削除し、activeShapes配列をクリア
+    activeShapes.forEach(function(s) { clearTimeout(s.timeoutId); removeEl(s.el); });
+    activeShapes = [];
+    
+    score = 0; level = 1; lives = 3;
+    render();
+    overlay.style.display = "none";
+    running = true;
+    spawnTimer = setTimeout(function () { spawn(myGen); }, 500); // 最初の図形を生成
+  }
+
+  // ゲームオーバー処理 (お手本を流用し、ゲーム固有の要素をリセット)
+  function endGame() {
+    running = false;
+    gen += 1; // 新しい世代に更新し、古いイベントが影響しないようにする
+    clearTimeout(spawnTimer); // 全てのタイマーをクリア
+    
+    // 全ての図形をDOMから削除し、activeShapes配列をクリア
+    activeShapes.forEach(function(s) { clearTimeout(s.timeoutId); removeEl(s.el); });
+    activeShapes = [];
+
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+  }
+
+  startBtn.addEventListener("click", startGame); // スタートボタンのイベントリスナー
+  render(); // 初期表示
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

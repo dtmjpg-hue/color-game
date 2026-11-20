@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>のびるはし</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0f172a; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 10px 14px; background: #0b1224; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hint { margin-top: 6px; text-align: center; font-size: 15px; color: #fbbf24; }
+  #field { position: relative; flex: 1; overflow: hidden;
+    background: linear-gradient(180deg, #0f172a 0%, #1e3a8a 55%, #f97316 130%); }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .fb { position: absolute; left: 0; right: 0; text-align: center; font-size: 26px; font-weight: bold;
+    pointer-events: none; animation: rise .9s ease-out forwards; text-shadow: 0 2px 6px rgba(0,0,0,.6); }
+  .good { color: #86efac; }
+  .perfect { color: #fde047; font-size: 32px; }
+  .bad { color: #fca5a5; }
+  @keyframes rise { to { transform: translateY(-48px); opacity: 0; } }
+  #overlay { position: absolute; inset: 0; background: rgba(8,10,28,.95); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 24px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 30px; margin: 0 0 14px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 46px; font-weight: bold; color: #fbbf24; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #fbbf24; border: none; border-radius: 14px; cursor: pointer; }
+  #muteBtn { position: absolute; right: 10px; bottom: 10px; z-index: 20; width: 46px; height: 46px;
+    min-width: 46px; min-height: 46px; margin: 0; padding: 0; font-size: 22px; border-radius: 50%;
+    background: rgba(255,255,255,.18); color: #fff; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hint">押している間のびる。はなすと橋になる</div>
+  </div>
+  <div id="field">
+    <canvas id="cv"></canvas>
+  </div>
+  <div id="overlay">
+    <h1 id="ovTitle">のびるはし</h1>
+    <div id="ovBody">
+      <p>画面を<b>押している間</b>、棒がのびるよ。</p>
+      <p><b>はなす</b>と棒が倒れて橋になる。次の足場にぴったり届けば成功!</p>
+      <p>短すぎても長すぎても、落ちてミス。<b>赤い印</b>を狙うと大ボーナス。</p>
+      <p>ライフは3つ。レベルが上がると、足場が遠く・細くなるよ。</p>
+    </div>
+    <button id="startBtn" type="button">スタート</button>
+  </div>
+  <button id="muteBtn" type="button" aria-label="音のオンとオフ">🔊</button>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ===== 効果音(Web Audioで作る。音声ファイルは使わない) =====
+  var soundOn = true;
+  try { soundOn = localStorage.getItem("nobiruhashi_sound") !== "off"; } catch (e) {}
+  var ac = null;
+  function audio() {
+    if (!soundOn) return null;
+    try {
+      if (!ac) { var AC = window.AudioContext || window.webkitAudioContext; if (AC) ac = new AC(); }
+      if (ac && ac.state === "suspended") ac.resume();
+    } catch (e) { ac = null; }
+    return ac;
+  }
+  function tone(freq, dur, type, vol, slideTo, delay) {
+    var a = audio();
+    if (!a) return;
+    try {
+      var t0 = a.currentTime + (delay || 0);
+      var o = a.createOscillator(), g = a.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t0);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.15, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(a.destination);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    } catch (e) {}
+  }
+  function overSound() {
+    tone(392, 0.22, "triangle", 0.14);
+    tone(330, 0.22, "triangle", 0.14, null, 0.2);
+    tone(262, 0.45, "triangle", 0.14, null, 0.4);
+  }
+
+  var growOsc = null;
+  function growSoundStart() {
+    var a = audio();
+    if (!a) return;
+    try {
+      growOsc = a.createOscillator();
+      var g = a.createGain();
+      growOsc.type = "triangle"; growOsc.frequency.value = 200; g.gain.value = 0.05;
+      growOsc.connect(g); g.connect(a.destination); growOsc.start();
+    } catch (e) { growOsc = null; }
+  }
+  function growSoundUpdate(len) { if (growOsc) { try { growOsc.frequency.value = 200 + len * 1.6; } catch (e) {} } }
+  function growSoundStop() { if (growOsc) { try { growOsc.stop(); } catch (e) {} growOsc = null; } }
+
+  var GROW = 330;          // 棒ののびる速さ(px/秒)
+  var PERFECT = 6;         // 赤い印からのズレがこの範囲なら、ぴったり
+  var HERO_W = 22, HERO_H = 28;
+
+  var W = 0, H = 0, dpr = 1, topY = 0;
+  var score = 0, level = 1, lives = 3, crossed = 0, combo = 0;
+  var running = false, gen = 0;
+  var state = "idle";      // idle / grow / turn / walk / fall / shift
+  var prev = null, cur = null, next = null;
+  var stickLen = 0, stickAngle = 0, success = false, perfect = false;
+  var hero = { x: 0, y: 0, vy: 0, rot: 0 };
+  var walkTarget = 0, cam = 0, camTarget = 0, lastT = 0, pressing = false;
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("nobiruhashi_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("nobiruhashi_best", String(v)); } catch (e) {}
+  }
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = field.clientWidth;
+    H = field.clientHeight;
+    cv.width = Math.floor(W * dpr);
+    cv.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    topY = Math.round(H * 0.66);
+  }
+
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  function feedback(text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.top = Math.round(H * 0.2) + "px";
+    field.appendChild(f);
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 950);
+  }
+
+  function makeNext() {
+    var gapMin = Math.min(50 + level * 9, 125);
+    var gapMax = Math.min(95 + level * 15, 215);
+    var wMax = Math.max(34, 100 - level * 7);
+    var wMin = Math.max(20, 60 - level * 5);
+    var gap = rand(gapMin, gapMax);
+    var w = rand(wMin, Math.max(wMin + 4, wMax));
+    next = { x: cur.x + cur.w + gap, w: w };
+  }
+
+  function heroHome() { return cur.x + cur.w - HERO_W / 2 - 4; }
+
+  function startGame() {
+    gen += 1;
+    growSoundStop(); audio(); tone(660, 0.08, "triangle", 0.14);
+    score = 0; level = 1; lives = 3; crossed = 0; combo = 0;
+    prev = null;
+    cur = { x: 30, w: 100 };
+    makeNext();
+    stickLen = 0; stickAngle = 0; state = "idle"; pressing = false;
+    hero.x = heroHome(); hero.y = topY; hero.vy = 0; hero.rot = 0;
+    camTarget = cur.x + cur.w - W * 0.3;
+    cam = camTarget;
+    render();
+    overlay.style.display = "none";
+    running = true;
+  }
+
+  function endGame(myGen) {
+    if (myGen !== gen) return;
+    running = false;
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>' + crossed + '回 わたれたよ(レベル ' + level + ')</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+    overSound();
+  }
+
+  function pressStart() {
+    if (!running || state !== "idle") return;
+    pressing = true;
+    state = "grow";
+    stickLen = 0;
+    growSoundStart();
+  }
+
+  function pressEnd() {
+    if (!pressing) return;
+    pressing = false;
+    if (state === "grow") release();
+  }
+
+  function release() {
+    growSoundStop();
+    state = "turn";
+    stickAngle = 0;
+  }
+
+  field.addEventListener("pointerdown", function (ev) { ev.preventDefault(); pressStart(); });
+  window.addEventListener("pointerup", pressEnd);
+  window.addEventListener("pointercancel", pressEnd);
+
+  function judge() {
+    var gap = next.x - (cur.x + cur.w);
+    success = stickLen >= gap && stickLen <= gap + next.w;
+    perfect = success && Math.abs(stickLen - (gap + next.w / 2)) <= PERFECT;
+    if (success) walkTarget = next.x + next.w - HERO_W / 2 - 4;
+    else walkTarget = cur.x + cur.w + stickLen;
+    tone(140, 0.12, "square", 0.1, 60);
+    state = "walk";
+  }
+
+  function arrive() {
+    if (perfect) {
+      tone(880, 0.12, "triangle", 0.16); tone(1175, 0.12, "triangle", 0.16, null, 0.09); tone(1568, 0.25, "triangle", 0.16, null, 0.18);
+    } else {
+      tone(660, 0.1, "triangle", 0.15); tone(880, 0.14, "triangle", 0.15, null, 0.09);
+    }
+    crossed += 1;
+    if (perfect) {
+      combo += 1;
+      score += 3 + Math.min(combo, 4);
+      feedback(combo >= 2 ? "パーフェクト! x" + combo : "パーフェクト!", "perfect");
+    } else {
+      combo = 0;
+      score += 1;
+      feedback("+1", "good");
+    }
+    level = 1 + Math.floor(crossed / 5);
+    render();
+    prev = cur;
+    cur = next;
+    makeNext();
+    camTarget = cur.x + cur.w - W * 0.3;
+    state = "shift";
+  }
+
+  function missDone() {
+    var g = gen;
+    lives -= 1;
+    combo = 0;
+    feedback("ミス!", "bad");
+    render();
+    if (lives <= 0) {
+      running = false;
+      setTimeout(function () { endGame(g); }, 500);
+      return;
+    }
+    stickLen = 0; stickAngle = 0;
+    hero.x = heroHome(); hero.y = topY; hero.vy = 0; hero.rot = 0;
+    state = "idle";
+  }
+
+  function rr(x, y, w, h, r, color) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  function drawPlatform(p, withMark) {
+    var x = p.x - cam;
+    if (x + p.w < -10 || x > W + 10) return;
+    ctx.fillStyle = "#0b1020";
+    ctx.fillRect(x, topY, p.w, H - topY);
+    ctx.fillStyle = "#334155";
+    ctx.fillRect(x, topY, p.w, 5);
+    if (withMark) {
+      ctx.fillStyle = "#f43f5e";
+      ctx.fillRect(x + p.w / 2 - PERFECT, topY - 2, PERFECT * 2, 8);
+    }
+  }
+
+  function drawHills() {
+    ctx.fillStyle = "rgba(15,23,42,.55)";
+    ctx.beginPath();
+    ctx.moveTo(0, topY);
+    for (var x = 0; x <= W; x += 10) {
+      var wx = x + cam * 0.25;
+      ctx.lineTo(x, topY - 40 - 28 * Math.sin(wx / 70) - 16 * Math.sin(wx / 31));
+    }
+    ctx.lineTo(W, topY);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawStars() {
+    ctx.fillStyle = "rgba(255,255,255,.7)";
+    for (var i = 0; i < 28; i++) {
+      var sx = ((i * 97) % 400) / 400 * (W + 60) - ((cam * 0.08) % (W + 60));
+      sx = ((sx % (W + 60)) + (W + 60)) % (W + 60);
+      var sy = ((i * 53) % 100) / 100 * (topY * 0.7);
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+  }
+
+  function drawHero() {
+    var x = hero.x - cam;
+    ctx.save();
+    ctx.translate(x, hero.y - HERO_H / 2);
+    ctx.rotate(hero.rot);
+    rr(-HERO_W / 2, -HERO_H / 2, HERO_W, HERO_H, 7, "#fb923c");
+    ctx.fillStyle = "#f43f5e";
+    ctx.fillRect(-HERO_W / 2, -HERO_H / 2 + 4, HERO_W, 4);
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(2, -HERO_H / 2 + 10, 6, 6);
+    ctx.fillStyle = "#111";
+    ctx.fillRect(5, -HERO_H / 2 + 12, 3, 3);
+    ctx.restore();
+  }
+
+  function frame(t) {
+    var dt = Math.min(0.05, (t - lastT) / 1000 || 0);
+    lastT = t;
+
+    if (running) {
+      if (state === "grow") {
+        stickLen += GROW * dt;
+        growSoundUpdate(stickLen);
+        if (stickLen >= 380) { stickLen = 380; pressing = false; release(); }
+      } else if (state === "turn") {
+        stickAngle += dt * (Math.PI / 2) / 0.32;
+        if (stickAngle >= Math.PI / 2) { stickAngle = Math.PI / 2; judge(); }
+      } else if (state === "walk") {
+        hero.x += 340 * dt;
+        if (hero.x >= walkTarget) {
+          hero.x = walkTarget;
+          if (success) arrive(); else { state = "fall"; hero.vy = 0; tone(500, 0.6, "sawtooth", 0.1, 90); }
+        }
+      } else if (state === "fall") {
+        hero.vy += 1700 * dt;
+        hero.y += hero.vy * dt;
+        hero.rot += dt * 6;
+        stickAngle = Math.min(Math.PI, stickAngle + dt * 5);   // 棒も、ぱたんと下に倒れる
+        if (hero.y > H + 60) missDone();
+      } else if (state === "shift") {
+        if (Math.abs(cam - camTarget) < 1.5) {
+          stickLen = 0; stickAngle = 0;
+          state = "idle";
+        }
+      }
+    }
+    cam += (camTarget - cam) * Math.min(1, dt * 6);
+
+    ctx.clearRect(0, 0, W, H);
+    drawStars();
+    drawHills();
+    if (prev) drawPlatform(prev, false);
+    drawPlatform(cur, false);
+    drawPlatform(next, true);
+
+    // 棒
+    if (stickLen > 0 && (state === "grow" || state === "turn" || state === "walk" || state === "fall" || state === "idle")) {
+      var bx = cur.x + cur.w - cam;
+      var ex = bx + stickLen * Math.sin(stickAngle);
+      var ey = topY - stickLen * Math.cos(stickAngle);
+      ctx.strokeStyle = "#fde68a";
+      ctx.lineWidth = 5;
+      ctx.lineCap = "round";
+      ctx.beginPath();
+      ctx.moveTo(bx, topY);
+      ctx.lineTo(ex, ey);
+      ctx.stroke();
+    }
+    drawHero();
+    requestAnimationFrame(frame);
+  }
+
+  startBtn.addEventListener("click", startGame);
+  var muteBtn = document.getElementById("muteBtn");
+  function showMute() { muteBtn.textContent = soundOn ? "🔊" : "🔇"; }
+  muteBtn.addEventListener("click", function () {
+    soundOn = !soundOn;
+    try { localStorage.setItem("nobiruhashi_sound", soundOn ? "on" : "off"); } catch (e) {}
+    showMute();
+    if (soundOn) tone(660, 0.1, "triangle", 0.14);
+  });
+  showMute();
+
+  window.addEventListener("resize", function () { resize(); });
+  resize();
+  cur = { x: 30, w: 100 };
+  makeNext();
+  hero.x = heroHome(); hero.y = topY;
+  camTarget = cur.x + cur.w - W * 0.3;
+  cam = camTarget;
+  render();
+  requestAnimationFrame(frame);
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

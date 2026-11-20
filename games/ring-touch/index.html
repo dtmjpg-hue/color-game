@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>リングタッチ</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0f172a; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 8px 14px; background: #0b1224; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hintRow { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  #hint { flex: 1; text-align: center; font-size: 15px; color: #fbbf24; }
+  #muteBtn { width: 42px; height: 42px; min-width: 42px; min-height: 42px; margin: 0; padding: 0; font-size: 21px;
+    border-radius: 50%; background: rgba(255,255,255,.16); color: #fff; }
+  #field { position: relative; flex: 1; overflow: hidden; background: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%); }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .fb { position: absolute; left: 0; right: 0; text-align: center; font-size: 28px; font-weight: bold;
+    pointer-events: none; animation: rise .9s ease-out forwards; text-shadow: 0 2px 8px rgba(0,0,0,.7); }
+  .good { color: #86efac; }
+  .lv { color: #fde047; font-size: 34px; }
+  .perfect { color: #fde047; }
+  .bad { color: #fca5a5; }
+  @keyframes rise { to { transform: translateY(-46px); opacity: 0; } }
+  #overlay { position: absolute; inset: 0; background: rgba(8,10,28,.94); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 22px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 30px; margin: 0 0 12px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 46px; font-weight: bold; color: #fbbf24; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #fbbf24; border: none; border-radius: 14px; cursor: pointer; }
+  #muteBtn { margin-top: 0; min-width: 42px; color: #fff; font-size: 21px; padding: 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hintRow">
+      <div id="hint">輪が丸に重なる瞬間にタップ!</div>
+      <button id="muteBtn" type="button" aria-label="音のオンとオフ">🔊</button>
+    </div>
+  </div>
+  <div id="field">
+    <canvas id="cv"></canvas>
+    <div id="overlay">
+      <h1 id="ovTitle">リングタッチ</h1>
+      <div id="ovBody">
+        <p>丸のまわりの<b>輪が、だんだん縮む</b>よ。</p>
+        <p>輪が<b>丸にぴったり重なる瞬間</b>に、その丸をタップしよう。<b>音も鳴る</b>よ!</p>
+        <p>早すぎ・遅すぎ・何もない所をタップすると、ミス。ライフは3つ。</p>
+        <p>進むほど、輪が速く縮んで、丸が小さくなるよ。</p>
+      </div>
+      <button id="startBtn" type="button">スタート</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ===== 効果音(Web Audioで作る。音声ファイルは使わない) =====
+  var soundOn = true;
+  try { soundOn = localStorage.getItem("ringtouch_sound") !== "off"; } catch (e) {}
+  var ac = null;
+  function audio() {
+    if (!soundOn) return null;
+    try {
+      if (!ac) { var AC = window.AudioContext || window.webkitAudioContext; if (AC) ac = new AC(); }
+      if (ac && ac.state === "suspended") ac.resume();
+    } catch (e) { ac = null; }
+    return ac;
+  }
+  function tone(freq, dur, type, vol, slideTo, delay) {
+    var a = audio();
+    if (!a) return;
+    try {
+      var t0 = a.currentTime + (delay || 0);
+      var o = a.createOscillator(), g = a.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t0);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.15, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(a.destination);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    } catch (e) {}
+  }
+  function overSound() {
+    tone(392, 0.22, "triangle", 0.14);
+    tone(330, 0.22, "triangle", 0.14, null, 0.2);
+    tone(262, 0.45, "triangle", 0.14, null, 0.4);
+  }
+  // つながるほど、音が高くなる(ドレミソラの音階)
+  var SCALE = [523.25, 587.33, 659.25, 783.99, 880, 1046.5, 1174.66, 1318.5, 1568];
+  function hitSound(kind, combo) {
+    var f = SCALE[Math.min(combo, SCALE.length - 1)];
+    if (kind === 3) { tone(f, 0.32, "sine", 0.2); tone(f * 2, 0.26, "triangle", 0.09, null, 0.05); tone(f * 1.5, 0.2, "sine", 0.1, null, 0.1); }
+    else if (kind === 2) { tone(f, 0.28, "sine", 0.18); tone(f * 2, 0.16, "triangle", 0.06); }
+    else { tone(f * 0.8, 0.2, "triangle", 0.14); }
+  }
+
+  var COLORS = ["#38bdf8", "#a78bfa", "#f472b6", "#fbbf24", "#34d399"];
+
+  var W = 0, H = 0, dpr = 1;
+  var score = 0, level = 1, lives = 3, hits = 0, combo = 0, colorIdx = 0;
+  var running = false, gen = 0;
+  var targets = [], fx = [], texts = [];
+  var spawnT = 0, shake = 0, lastT = 0;
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("ringtouch_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("ringtouch_best", String(v)); } catch (e) {}
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = field.clientWidth;
+    H = field.clientHeight;
+    cv.width = Math.floor(W * dpr);
+    cv.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  function feedback(text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.top = Math.round(H * 0.03) + "px";
+    field.appendChild(f);
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 950);
+  }
+
+  // 難しさ(レベルで変わる)
+  function approachSec() { return Math.max(0.62, 1.5 - (level - 1) * 0.09); }
+  function radiusNow() { return Math.max(26, 40 - (level - 1) * 1.5); }
+  function intervalNow() { return Math.max(0.45, 1.25 - (level - 1) * 0.08) * (0.8 + Math.random() * 0.4); }
+  var RING = 70;   // 輪のはじめの大きさ(丸の半径に足す)
+
+  function spawn() {
+    var r = radiusNow();
+    var m = r + RING + 6;
+    var x = 0, y = 0, ok = false;
+    for (var tries = 0; tries < 14 && !ok; tries++) {
+      x = m + Math.random() * Math.max(1, W - 2 * m);
+      y = m + 20 + Math.random() * Math.max(1, H - 2 * m - 40);
+      ok = true;
+      for (var i = 0; i < targets.length; i++) {
+        var dx = targets[i].x - x, dy = targets[i].y - y;
+        if (Math.sqrt(dx * dx + dy * dy) < 2 * r + 46) { ok = false; break; }
+      }
+    }
+    if (!ok) return false;
+    colorIdx = (colorIdx + 1) % COLORS.length;
+    targets.push({ x: x, y: y, r: r, D: approachSec(), age: 0, color: COLORS[colorIdx] });
+    return true;
+  }
+
+  function startGame() {
+    gen += 1;
+    audio(); tone(660, 0.08, "triangle", 0.14);
+    score = 0; level = 1; lives = 3; hits = 0; combo = 0;
+    targets = []; fx = []; texts = []; shake = 0; spawnT = 0.6;
+    render();
+    overlay.style.display = "none";
+    running = true;
+  }
+
+  function endGame(myGen) {
+    if (myGen !== gen) return;
+    running = false;
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+    overSound();
+  }
+
+  function addText(x, y, text, color) { texts.push({ x: x, y: y, text: text, color: color, t: 0 }); }
+
+  function loseLife(text, x, y) {
+    lives -= 1;
+    combo = 0;
+    shake = 9;
+    if (x !== undefined) addText(x, y, text, "#fca5a5");
+    else feedback(text, "bad");
+    tone(180, 0.28, "sawtooth", 0.11, 80);
+    render();
+    if (lives <= 0) {
+      running = false;
+      var g = gen;
+      setTimeout(function () { endGame(g); }, 600);
+    }
+  }
+
+  function burst(x, y, color, n) {
+    for (var i = 0; i < n; i++) {
+      var a = Math.PI * 2 * i / n + Math.random() * 0.4, sp = 90 + Math.random() * 120;
+      fx.push({ kind: "p", x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, color: color, t: 0 });
+    }
+    fx.push({ kind: "r", x: x, y: y, color: color, t: 0 });
+  }
+
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    ev.preventDefault();
+    var rect = cv.getBoundingClientRect();
+    var px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+    var best = null, bestP = -1;
+    for (var i = 0; i < targets.length; i++) {
+      var t = targets[i];
+      var dx = t.x - px, dy = t.y - py;
+      if (Math.sqrt(dx * dx + dy * dy) <= t.r * 1.7 + 10) {
+        var p = t.age / t.D;
+        if (p > bestP) { bestP = p; best = t; }
+      }
+    }
+    if (!best) { loseLife("ミス!", px, py); return; }
+
+    var d = Math.abs(bestP - 1);
+    targets.splice(targets.indexOf(best), 1);
+    if (bestP < 0.62) {                               // 早すぎ
+      burst(best.x, best.y, "#94a3b8", 6);
+      loseLife("はやい!", best.x, best.y);
+      return;
+    }
+    var kind = d <= 0.07 ? 3 : (d <= 0.16 ? 2 : 1);
+    score += kind;
+    hits += 1;
+    combo += 1;
+    hitSound(kind, combo - 1);
+    burst(best.x, best.y, best.color, kind === 3 ? 16 : 10);
+    addText(best.x, best.y - best.r - 8, kind === 3 ? "パーフェクト!" : (kind === 2 ? "グレート" : "グッド"),
+            kind === 3 ? "#fde047" : (kind === 2 ? "#86efac" : "#e2e8f0"));
+    var nl = 1 + Math.floor(hits / 8);
+    if (nl > level) {
+      level = nl;
+      feedback("レベル " + level + "!", "lv");
+      tone(784, 0.1, "triangle", 0.12, null, 0.12);
+      tone(988, 0.1, "triangle", 0.12, null, 0.2);
+      tone(1318, 0.18, "triangle", 0.12, null, 0.28);
+    }
+    render();
+  });
+
+  function frame(t) {
+    var dt = Math.min(0.05, (t - lastT) / 1000 || 0);
+    lastT = t;
+
+    if (running) {
+      spawnT -= dt;
+      if (spawnT <= 0 && targets.length < 4) {
+        if (spawn()) spawnT = intervalNow(); else spawnT = 0.15;
+      }
+      for (var i = targets.length - 1; i >= 0 && running; i--) {
+        var tg = targets[i];
+        tg.age += dt;
+        if (tg.age / tg.D > 1.18) {                   // 遅すぎ
+          targets.splice(i, 1);
+          burst(tg.x, tg.y, "#f87171", 6);
+          loseLife("おそい!", tg.x, tg.y);
+        }
+      }
+    }
+    for (var k = fx.length - 1; k >= 0; k--) {
+      var f = fx[k];
+      f.t += dt;
+      if (f.kind === "p") { f.x += f.vx * dt; f.y += f.vy * dt; f.vy += 260 * dt; }
+      if (f.t > 0.55) fx.splice(k, 1);
+    }
+    for (var q = texts.length - 1; q >= 0; q--) {
+      texts[q].t += dt;
+      if (texts[q].t > 0.8) texts.splice(q, 1);
+    }
+    if (shake > 0) shake = Math.max(0, shake - dt * 60);
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, 0);
+
+    for (var j = 0; j < targets.length; j++) {
+      var a = targets[j];
+      var p = a.age / a.D;
+      var alpha = Math.min(1, a.age / 0.18);
+      var R = a.r + RING * Math.max(0, 1 - p);
+      var golden = p >= 0.93 && p <= 1.07;
+      ctx.globalAlpha = alpha;
+      // 丸
+      var g = ctx.createRadialGradient(a.x - a.r * 0.3, a.y - a.r * 0.3, a.r * 0.1, a.x, a.y, a.r);
+      g.addColorStop(0, "#ffffff");
+      g.addColorStop(1, a.color);
+      ctx.shadowColor = a.color;
+      ctx.shadowBlur = golden ? 26 : 14;
+      ctx.beginPath(); ctx.arc(a.x, a.y, a.r, 0, Math.PI * 2);
+      ctx.fillStyle = g; ctx.fill();
+      ctx.shadowBlur = 0;
+      // 縮む輪
+      ctx.beginPath(); ctx.arc(a.x, a.y, R, 0, Math.PI * 2);
+      ctx.strokeStyle = golden ? "#fde047" : "rgba(255,255,255,.85)";
+      ctx.lineWidth = golden ? 6 : 4;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    for (var m = 0; m < fx.length; m++) {
+      var e = fx[m], pr = e.t / 0.55;
+      ctx.globalAlpha = Math.max(0, 1 - pr);
+      if (e.kind === "p") {
+        ctx.fillStyle = e.color;
+        ctx.beginPath(); ctx.arc(e.x, e.y, 4 * (1 - pr) + 1, 0, Math.PI * 2); ctx.fill();
+      } else {
+        ctx.strokeStyle = e.color; ctx.lineWidth = 4;
+        ctx.beginPath(); ctx.arc(e.x, e.y, 20 + pr * 60, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    ctx.font = "bold 22px sans-serif";
+    ctx.textAlign = "center";
+    for (var n = 0; n < texts.length; n++) {
+      var x = texts[n], pt = x.t / 0.8;
+      ctx.globalAlpha = Math.max(0, 1 - pt);
+      ctx.lineWidth = 4; ctx.strokeStyle = "rgba(0,0,0,.6)";
+      ctx.strokeText(x.text, x.x, x.y - pt * 34);
+      ctx.fillStyle = x.color;
+      ctx.fillText(x.text, x.x, x.y - pt * 34);
+      ctx.globalAlpha = 1;
+    }
+    if (running && combo >= 3) {
+      ctx.font = "bold 20px sans-serif";
+      ctx.fillStyle = "rgba(253,224,71,.9)";
+      ctx.fillText(combo + " コンボ", W / 2, H - 22);
+    }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  startBtn.addEventListener("click", startGame);
+  var muteBtn = document.getElementById("muteBtn");
+  function showMute() { muteBtn.textContent = soundOn ? "🔊" : "🔇"; }
+  muteBtn.addEventListener("click", function () {
+    soundOn = !soundOn;
+    try { localStorage.setItem("ringtouch_sound", soundOn ? "on" : "off"); } catch (e) {}
+    showMute();
+    if (soundOn) tone(660, 0.1, "triangle", 0.14);
+  });
+  showMute();
+  window.addEventListener("resize", function () { resize(); });
+  resize();
+  render();
+  requestAnimationFrame(frame);
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>

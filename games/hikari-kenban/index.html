@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>ひかりのけんばん</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #0f172a; color: #fff;
+    font-family: "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+    touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  #hud { padding: 8px 14px; background: #0b1224; }
+  #stats { display: flex; justify-content: space-between; font-size: 17px; font-weight: bold; }
+  #hintRow { display: flex; align-items: center; justify-content: space-between; margin-top: 4px; }
+  #hint { flex: 1; text-align: center; font-size: 15px; color: #fbbf24; }
+  #muteBtn { width: 42px; height: 42px; min-width: 42px; min-height: 42px; margin: 0; padding: 0; font-size: 21px;
+    border-radius: 50%; background: rgba(255,255,255,.16); color: #fff; }
+  #field { position: relative; flex: 1; overflow: hidden; background: linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%); }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+  .fb { position: absolute; left: 0; right: 0; text-align: center; font-size: 28px; font-weight: bold;
+    pointer-events: none; animation: rise .9s ease-out forwards; text-shadow: 0 2px 8px rgba(0,0,0,.7); }
+  .good { color: #86efac; }
+  .lv { color: #fde047; font-size: 34px; }
+  .bad { color: #fca5a5; }
+  @keyframes rise { to { transform: translateY(-46px); opacity: 0; } }
+  #overlay { position: absolute; inset: 0; background: rgba(8,10,28,.94); display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 22px; text-align: center; z-index: 10; }
+  #overlay h1 { font-size: 30px; margin: 0 0 12px; }
+  #overlay p { font-size: 17px; line-height: 1.7; margin: 4px 0; max-width: 320px; }
+  .big { font-size: 46px; font-weight: bold; color: #fbbf24; margin: 6px 0; }
+  button { margin-top: 22px; min-width: 200px; min-height: 56px; padding: 14px 36px; font-size: 22px;
+    font-weight: bold; color: #3a2a00; background: #fbbf24; border: none; border-radius: 14px; cursor: pointer; }
+  #muteBtn { margin-top: 0; min-width: 42px; color: #fff; font-size: 21px; padding: 0; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="hud">
+    <div id="stats">
+      <span>スコア <span id="score">0</span></span>
+      <span>レベル <span id="level">1</span></span>
+      <span>ライフ <span id="life">♥♥♥</span></span>
+    </div>
+    <div id="hintRow">
+      <div id="hint">光るタイルを、下から順にタップ!</div>
+      <button id="muteBtn" type="button" aria-label="音のオンとオフ">🔊</button>
+    </div>
+  </div>
+  <div id="field">
+    <canvas id="cv"></canvas>
+    <div id="overlay">
+      <h1 id="ovTitle">ひかりのけんばん</h1>
+      <div id="ovBody">
+        <p>上から落ちてくる<b>光るタイル</b>を、<b>いちばん下のものから順に</b>タップしよう。</p>
+        <p>タップすると<b>音が鳴る</b>よ。メロディを弾く気分で!</p>
+        <p>下まで落とす、まちがった場所をタップすると、ミス。ライフは3つ。</p>
+        <p>進むほど、どんどん速くなるよ。</p>
+      </div>
+      <button id="startBtn" type="button">スタート</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var field = document.getElementById("field");
+  var cv = document.getElementById("cv");
+  var ctx = cv.getContext("2d");
+  var scoreEl = document.getElementById("score");
+  var levelEl = document.getElementById("level");
+  var lifeEl = document.getElementById("life");
+  var overlay = document.getElementById("overlay");
+  var ovTitle = document.getElementById("ovTitle");
+  var ovBody = document.getElementById("ovBody");
+  var startBtn = document.getElementById("startBtn");
+
+  // ===== 効果音(Web Audioで作る。音声ファイルは使わない) =====
+  var soundOn = true;
+  try { soundOn = localStorage.getItem("hikarikenban_sound") !== "off"; } catch (e) {}
+  var ac = null;
+  function audio() {
+    if (!soundOn) return null;
+    try {
+      if (!ac) { var AC = window.AudioContext || window.webkitAudioContext; if (AC) ac = new AC(); }
+      if (ac && ac.state === "suspended") ac.resume();
+    } catch (e) { ac = null; }
+    return ac;
+  }
+  function tone(freq, dur, type, vol, slideTo, delay) {
+    var a = audio();
+    if (!a) return;
+    try {
+      var t0 = a.currentTime + (delay || 0);
+      var o = a.createOscillator(), g = a.createGain();
+      o.type = type || "sine";
+      o.frequency.setValueAtTime(freq, t0);
+      if (slideTo) o.frequency.exponentialRampToValueAtTime(slideTo, t0 + dur);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(vol || 0.15, t0 + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      o.connect(g); g.connect(a.destination);
+      o.start(t0); o.stop(t0 + dur + 0.03);
+    } catch (e) {}
+  }
+  function overSound() {
+    tone(392, 0.22, "triangle", 0.14);
+    tone(330, 0.22, "triangle", 0.14, null, 0.2);
+    tone(262, 0.45, "triangle", 0.14, null, 0.4);
+  }
+
+  var LANES = 4;
+  var NOTES = [523.25, 659.25, 783.99, 1046.5];            // ド・ミ・ソ・高いド
+  var COLORS = ["#38bdf8", "#a78bfa", "#f472b6", "#fbbf24"];
+
+  var W = 0, H = 0, dpr = 1, rowH = 120;
+  var score = 0, level = 1, lives = 3, hits = 0;
+  var running = false, gen = 0;
+  var rows = [], fx = [];                                  // rows[0] が、いちばん下のタイル
+  var prevLane = 1, shake = 0, lastT = 0, flashLane = -1, flashT = 0;
+
+  function loadBest() {
+    try { return parseInt(localStorage.getItem("hikarikenban_best") || "0", 10) || 0; } catch (e) { return 0; }
+  }
+  function saveBest(v) {
+    try { localStorage.setItem("hikarikenban_best", String(v)); } catch (e) {}
+  }
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    W = field.clientWidth;
+    H = field.clientHeight;
+    cv.width = Math.floor(W * dpr);
+    cv.height = Math.floor(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    rowH = Math.max(86, Math.min(150, Math.round(H * 0.18)));
+  }
+
+  function render() {
+    scoreEl.textContent = String(score);
+    levelEl.textContent = String(level);
+    var hearts = "";
+    for (var i = 0; i < 3; i++) hearts += (i < lives ? "♥" : "♡");
+    lifeEl.textContent = hearts;
+  }
+
+  function feedback(text, cls) {
+    var f = document.createElement("div");
+    f.className = "fb " + cls;
+    f.textContent = text;
+    f.style.top = Math.round(H * 0.18) + "px";
+    field.appendChild(f);
+    setTimeout(function () { if (f.parentNode) f.parentNode.removeChild(f); }, 950);
+  }
+
+  function speedNow() { return Math.min(150 + (level - 1) * 30, 440); }
+
+  function pickLane() {
+    var l = prevLane;
+    if (Math.random() < 0.8) {
+      do { l = Math.floor(Math.random() * LANES); } while (l === prevLane);
+    }
+    prevLane = l;
+    return l;
+  }
+
+  function fillRows() {
+    while (rows.length === 0 || rows[rows.length - 1].y > -rowH) {
+      var top = rows.length ? rows[rows.length - 1].y - rowH : H * 0.3;
+      rows.push({ y: top, lane: pickLane() });
+    }
+  }
+
+  function startGame() {
+    gen += 1;
+    audio(); tone(660, 0.08, "triangle", 0.14);
+    score = 0; level = 1; lives = 3; hits = 0;
+    rows = []; fx = []; prevLane = 1; shake = 0; flashLane = -1;
+    fillRows();
+    render();
+    overlay.style.display = "none";
+    running = true;
+  }
+
+  function endGame(myGen) {
+    if (myGen !== gen) return;
+    running = false;
+    var best = loadBest();
+    var isNew = score > best;
+    if (isNew) { best = score; saveBest(best); }
+    ovTitle.textContent = "ゲームオーバー";
+    ovBody.innerHTML =
+      '<p>最終スコア</p><div class="big">' + score + '点</div>' +
+      '<p>レベル ' + level + ' まで進んだよ</p>' +
+      '<p>ベスト: ' + best + '点' + (isNew ? '(新記録!)' : '') + '</p>';
+    startBtn.textContent = "もういちど";
+    overlay.style.display = "flex";
+    overSound();
+  }
+
+  function loseLife(text) {
+    lives -= 1;
+    shake = 10;
+    feedback(text, "bad");
+    tone(180, 0.28, "sawtooth", 0.11, 80);
+    render();
+    if (lives <= 0) {
+      running = false;
+      var g = gen;
+      setTimeout(function () { endGame(g); }, 600);
+    }
+  }
+
+  field.addEventListener("pointerdown", function (ev) {
+    if (!running) return;
+    ev.preventDefault();
+    var rect = cv.getBoundingClientRect();
+    var lane = Math.max(0, Math.min(LANES - 1, Math.floor((ev.clientX - rect.left) / (rect.width / LANES))));
+    var r = rows[0];
+    if (r && r.y + rowH > 0 && r.lane === lane) {
+      rows.shift();
+      fx.push({ lane: lane, y: r.y, t: 0 });
+      hits += 1;
+      score += 1;
+      tone(NOTES[lane], 0.38, "sine", 0.2);
+      tone(NOTES[lane] * 2, 0.22, "triangle", 0.05);
+      var nl = 1 + Math.floor(hits / 8);
+      if (nl > level) {
+        level = nl;
+        feedback("レベル " + level + "!", "lv");
+        tone(784, 0.1, "triangle", 0.12, null, 0.05);
+        tone(988, 0.1, "triangle", 0.12, null, 0.13);
+        tone(1318, 0.18, "triangle", 0.12, null, 0.21);
+      }
+      render();
+    } else {
+      flashLane = lane; flashT = 0.25;
+      loseLife("ミス!");
+    }
+  });
+
+  function rrect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function frame(t) {
+    var dt = Math.min(0.05, (t - lastT) / 1000 || 0);
+    lastT = t;
+
+    if (running) {
+      var sp = speedNow() * dt;
+      for (var i = 0; i < rows.length; i++) rows[i].y += sp;
+      if (rows.length && rows[0].y >= H - 14) {
+        rows.shift();
+        loseLife("おちた!");
+      }
+      if (running) fillRows();
+    }
+    for (var k = fx.length - 1; k >= 0; k--) {
+      fx[k].t += dt;
+      if (fx[k].t > 0.45) fx.splice(k, 1);
+    }
+    if (shake > 0) shake = Math.max(0, shake - dt * 60);
+    if (flashT > 0) flashT = Math.max(0, flashT - dt);
+
+    var lw = W / LANES;
+    ctx.clearRect(0, 0, W, H);
+    ctx.save();
+    if (shake > 0) ctx.translate((Math.random() - 0.5) * shake, 0);
+
+    // レーンの線
+    ctx.strokeStyle = "rgba(255,255,255,.08)";
+    ctx.lineWidth = 1;
+    for (var l = 1; l < LANES; l++) {
+      ctx.beginPath(); ctx.moveTo(l * lw, 0); ctx.lineTo(l * lw, H); ctx.stroke();
+    }
+    // まちがえたレーンを、赤くひからせる
+    if (flashT > 0 && flashLane >= 0) {
+      ctx.fillStyle = "rgba(244,63,94," + (flashT / 0.25 * 0.28) + ")";
+      ctx.fillRect(flashLane * lw, 0, lw, H);
+    }
+    // 下の、あぶないライン
+    var grad = ctx.createLinearGradient(0, H - 36, 0, H);
+    grad.addColorStop(0, "rgba(244,63,94,0)");
+    grad.addColorStop(1, "rgba(244,63,94,.55)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, H - 36, W, 36);
+
+    // タイル
+    for (var j = rows.length - 1; j >= 0; j--) {
+      var r = rows[j];
+      if (r.y > H || r.y + rowH < 0) continue;
+      var x = r.lane * lw + 4, y = r.y + 3, w = lw - 8, h = rowH - 6;
+      var g = ctx.createLinearGradient(0, y, 0, y + h);
+      g.addColorStop(0, COLORS[r.lane]);
+      g.addColorStop(1, "rgba(255,255,255,.78)");
+      ctx.shadowColor = COLORS[r.lane];
+      ctx.shadowBlur = j === 0 ? 22 : 10;           // いちばん下のタイルは、とくに光らせる
+      rrect(x, y, w, h, 12);
+      ctx.fillStyle = g;
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      if (j === 0) {
+        ctx.strokeStyle = "#ffffff";
+        ctx.lineWidth = 3;
+        rrect(x, y, w, h, 12);
+        ctx.stroke();
+      }
+    }
+    // タップできたときの、光と波紋
+    for (var q = 0; q < fx.length; q++) {
+      var e = fx[q], p = e.t / 0.45;
+      var cx = e.lane * lw + lw / 2, cy = e.y + rowH / 2;
+      ctx.fillStyle = "rgba(255,255,255," + (0.55 * (1 - p)) + ")";
+      rrect(e.lane * lw + 4, e.y + 3, lw - 8, rowH - 6, 12);
+      ctx.fill();
+      ctx.strokeStyle = COLORS[e.lane];
+      ctx.globalAlpha = 1 - p;
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(cx, cy, 20 + p * 70, 0, Math.PI * 2); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    ctx.restore();
+    requestAnimationFrame(frame);
+  }
+
+  startBtn.addEventListener("click", startGame);
+  var muteBtn = document.getElementById("muteBtn");
+  function showMute() { muteBtn.textContent = soundOn ? "🔊" : "🔇"; }
+  muteBtn.addEventListener("click", function () {
+    soundOn = !soundOn;
+    try { localStorage.setItem("hikarikenban_sound", soundOn ? "on" : "off"); } catch (e) {}
+    showMute();
+    if (soundOn) tone(660, 0.1, "triangle", 0.14);
+  });
+  showMute();
+  window.addEventListener("resize", function () { resize(); });
+  resize();
+  fillRows();
+  render();
+  requestAnimationFrame(frame);
+})();
+</script>
+<script data-goatcounter="https://tomu-games.goatcounter.com/count" async src="//gc.zgo.at/count.js"></script>
+</body>
+</html>
